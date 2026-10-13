@@ -1,7 +1,10 @@
-# 001 — Fade in / out
+/# 001 — Fade in / out
 
-**Baseline:** [`SPEC.md`](SPEC.md) (contract `G1`–`G40`, assumptions `A1`–`A8`)
-**Status:** proposed — not implemented
+**Baseline:** [`SPEC.md`](SPEC.md) — this spec was written against `G1`–`G40`. The
+changes below have since been applied, so the contract now runs to `G46` and `A8` reads
+differently.
+**Status:** **Phase 1 implemented.** Fades are applied on export and drawn on the
+waveform. Phase 2 — audible preview — is outstanding.
 **Date:** 2026-10-13
 
 ```
@@ -199,3 +202,47 @@ it is trusted.
 - Fades spanning the whole file rather than the selection.
 - Per-channel or per-region fades, automation curves, multiple fade points.
 - Gain, normalisation, EQ, compression.
+
+---
+
+## Delivered (Phase 1)
+
+| | |
+| --- | --- |
+| Export | `FadeSpec`, `fadeFrameCounts`, `fadeGain`, applied in the chunked read loop. Gated on `FadeSpec.isActive`, so a no-fade export takes the original path untouched. |
+| Model | `fadeInDuration` / `fadeOutDuration` with clamped setters, re-clamped by `clampFades()` on every selection change. |
+| UI | Two millisecond fields in the transport bar, plus `WaveformView.drawFadeEnvelope`. |
+| Checks | selftest 64 → 95, uitest 52 → 75. Every new check was confirmed to fail with the fade removed. |
+
+### What differed from the plan
+
+- **The envelope colour turned out to be load-bearing, which was not anticipated.**
+  The checks classify ink by colour, so a fade drawn in mint/cyan reads as *waveform*
+  and one drawn in coral reads as a *trim handle* — either would have silently
+  corrupted existing measurements rather than failing loudly. The envelope is magenta
+  because that falls outside every classifier. The system accent is the other hazard:
+  this machine's purple accent `(0.65, 0.31, 0.65)` initially matched the envelope
+  classifier, which is why `Ink.isFade` bounds `r > 0.80` and `b < r - 0.10`.
+- **Acceptance criterion 4 was implemented differently.** It asked that "both fades
+  0 ms produces output bit-identical to the current no-fade export" — but both are the
+  same code path, so that comparison is tautological. The check instead proves an
+  unfaded export still copies the source, which is the property that actually protects
+  the pre-existing guarantees. `G46` is true structurally: `isActive` skips the fade
+  loop entirely rather than multiplying by 1.0.
+- **Criterion 7 (envelope endpoints align with the handles) was broadened** into region
+  containment plus linearity at 25/50/75%. That is strictly more informative: it
+  distinguishes linear from equal-power, which endpoint alignment cannot.
+
+### A checker limitation this exposed
+
+A playhead parked exactly on a trim handle splits that handle's amber into single-pixel
+slivers, which the handle detector's minimum cluster width then discards — reported as
+"found 1 full-height amber bars" while the app is behaving correctly. `setTrimStart`
+drags the playhead forward, so *omitting* `--playhead` is what parks it there. Recorded
+in `AGENTS.md` and in `uitest.sh`.
+
+### Still open (Phase 2)
+
+Audible preview, by the mechanism sketched above. Until then a fade is silent during
+audition and the workflow is export → listen → adjust, which `SPEC.md` and `README.md`
+now both state plainly rather than leaving the user to discover it.

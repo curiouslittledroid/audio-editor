@@ -10,6 +10,7 @@
 #   ./tools/capture.sh <out.png> [opts]
 #
 #   --file <wav>        load a file          --trim <start> <end>
+#   --fade <in>,<out>   linear fades in seconds at the trim boundaries
 #   --playhead <sec>    place the playhead   --loop
 #   --size <WxH>        window size          --banner "error:msg" | "info:msg"
 #   --uicheck           also run pixel assertions
@@ -34,7 +35,7 @@ fi
 
 [[ -x "$BIN" ]] || { echo "error: no binary at $BIN" >&2; exit 1; }
 
-unset AUDIOEDIT_SNAPSHOT AUDIOEDIT_FILE AUDIOEDIT_TRIM AUDIOEDIT_PLAYHEAD \
+unset AUDIOEDIT_SNAPSHOT AUDIOEDIT_FILE AUDIOEDIT_TRIM AUDIOEDIT_FADE AUDIOEDIT_PLAYHEAD \
       AUDIOEDIT_LOOP AUDIOEDIT_SIZE AUDIOEDIT_BANNER AUDIOEDIT_UICHECK \
       AUDIOEDIT_LOUD AUDIOEDIT_QUIET AUDIOEDIT_SETTLE AUDIOEDIT_SELFTEST 2>/dev/null || true
 
@@ -44,6 +45,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --file)      export AUDIOEDIT_FILE="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; shift 2 ;;
         --trim)      export AUDIOEDIT_TRIM="$2,$3"; shift 3 ;;
+        --fade)      export AUDIOEDIT_FADE="$2"; shift 2 ;;
         --playhead)  export AUDIOEDIT_PLAYHEAD="$2"; shift 2 ;;
         --loop)      export AUDIOEDIT_LOOP=1; shift ;;
         --size)      export AUDIOEDIT_SIZE="$2"; shift 2 ;;

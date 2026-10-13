@@ -51,6 +51,20 @@ struct UICheck {
                 && (b - r) > 0.03
                 && Swift.min(r, g, b) < 0.50
                 && !isAmber(r, g, b)
+                && !isFade(r, g, b)
+        }
+        /// Magenta: the fade envelope. Its own family on purpose — the palette
+        /// colour is picked to fall outside both `isWaveform` and `isAmber`, so
+        /// an envelope can never be miscounted as audio or as a trim handle.
+        ///
+        /// The `r > 0.80 && b < r - 0.10` bounds are what separate it from the
+        /// blue-purple macOS accent colour (measured at 0.65, 0.31, 0.65, which
+        /// otherwise matches). The accent is user-configurable, so the envelope
+        /// must never be identified by a test that an accent could satisfy.
+        /// The `!isFade` guard in `isWaveform` is belt-and-braces against a
+        /// future palette change quietly reintroducing that confusion.
+        static func isFade(_ r: Double, _ g: Double, _ b: Double) -> Bool {
+            r > 0.80 && b > 0.30 && b < r - 0.10 && g < r - 0.15 && g < b - 0.05
         }
         /// The waveform panel's dark blue-grey background (plot and surround).
         static func isPanelBackground(_ r: Double, _ g: Double, _ b: Double) -> Bool {
@@ -68,6 +82,9 @@ struct UICheck {
         var trimEnd: Double = 0
         var playhead: Double = 0
         var duration: Double = 0
+        var checkFades = false
+        var fadeIn: Double = 0
+        var fadeOut: Double = 0
     }
 
     static func run(bitmap: Bitmap, spec: Spec, reporter: TestReporter) -> Int32 {
@@ -245,6 +262,97 @@ struct UICheck {
             }
         }
 
+        // -------------------------------------------------------- fade envelope
+        // Confined to the waveform panel on purpose. The transport bar carries
+        // magenta fade-field text and the header carries accent-coloured chrome,
+        // so an unbounded search would find both and mistake them for an
+        // envelope.
+        if spec.checkFades, spec.fadeIn > 0 || spec.fadeOut > 0,
+           let band = panelBand(bitmap: bitmap) {
+
+            // Per column, how far the envelope ink reaches from the centre line.
+            // The stroked edges sit at gain × full amplitude, so this offset is
+            // the drawn gain.
+            var envelopeOffset = [Int](repeating: -1, count: bitmap.width)
+            for x in 0..<bitmap.width {
+                for y in band.top...band.bottom {
+                    let (r, g, b) = bitmap.rgb(x, y)
+                    if Ink.isFade(r, g, b) {
+                        envelopeOffset[x] = max(envelopeOffset[x], abs(y - midY))
+                    }
+                }
+            }
+            let envelopeColumns = (0..<bitmap.width).filter { envelopeOffset[$0] >= 0 }
+            reporter.check("fade envelope rendered", !envelopeColumns.isEmpty,
+                           "no envelope ink inside the waveform panel")
+
+            func offsetNear(_ target: Int) -> Int? {
+                let values = ((target - 2)...(target + 2))
+                    .filter { $0 >= 0 && $0 < bitmap.width }
+                    .compactMap { envelopeOffset[$0] >= 0 ? envelopeOffset[$0] : nil }
+                guard !values.isEmpty else { return nil }
+                return values.reduce(0, +) / values.count
+            }
+
+            let tolerance = max(6, Int(Double(bitmap.width) * 0.008))
+
+            // Both fades are drawn from the same ink, so each check has to accept
+            // the other's region as legitimate — otherwise the fade-in check
+            // reports the fade-out's columns as strays, and vice versa.
+            func region(start: Double, fade: Double) -> ClosedRange<Int>? {
+                guard fade > 0 else { return nil }
+                return (column(atTime: start) - tolerance)...(column(atTime: start + fade) + tolerance)
+            }
+            let fadeInRegion = region(start: spec.trimStart, fade: spec.fadeIn)
+            let fadeOutRegion = region(start: spec.trimEnd - spec.fadeOut, fade: spec.fadeOut)
+            let knownRegions = [fadeInRegion, fadeOutRegion].compactMap { $0 }
+
+            func checkFade(_ label: String, start: Double, fade: Double, rising: Bool,
+                           own: ClosedRange<Int>?) {
+                guard fade > 0, let own else { return }
+                let inside = envelopeColumns.filter { own.contains($0) }
+                let outside = envelopeColumns.filter { column in
+                    !knownRegions.contains { $0.contains(column) }
+                }
+
+                reporter.check("fade-\(label) envelope spans \(spot(start))–\(spot(start + fade))",
+                               inside.count >= max(4, own.count / 2),
+                               "\(inside.count) envelope columns in \(own.lowerBound + tolerance)…\(own.upperBound - tolerance)")
+                // Nothing in an unexpected place proves the envelope marks the
+                // right region rather than merely existing somewhere.
+                reporter.check("fade-\(label) envelope confined to its region",
+                               outside.isEmpty,
+                               "\(outside.count) envelope columns outside both fades")
+
+                let peak = inside.compactMap { envelopeOffset[$0] >= 0 ? envelopeOffset[$0] : nil }.max() ?? 0
+                guard peak > 4 else {
+                    reporter.check("fade-\(label) envelope has extent", false,
+                                   "peak offset \(peak)px from the centre line")
+                    return
+                }
+                // Linear in gain, so the drawn offset is proportional to the
+                // fraction through the fade. This is what separates linear from
+                // equal-power, which would read ~71% at the midpoint.
+                for fraction in [0.25, 0.5, 0.75] {
+                    let time = rising ? start + fade * fraction : start + fade * (1 - fraction)
+                    guard let measured = offsetNear(column(atTime: time)) else {
+                        reporter.check("fade-\(label) \(Int(fraction * 100))% point", false,
+                                       "no envelope ink at \(spot(time))")
+                        continue
+                    }
+                    let expected = Double(peak) * fraction
+                    reporter.check("fade-\(label) is linear at \(Int(fraction * 100))%",
+                                   abs(Double(measured) - expected) <= Double(peak) * 0.12,
+                                   "offset \(measured)px, expected \(Int(expected))px of \(peak)px")
+                }
+            }
+
+            checkFade("in", start: spec.trimStart, fade: spec.fadeIn, rising: true,
+                      own: fadeInRegion)
+            checkFade("out", start: spec.trimEnd - spec.fadeOut, fade: spec.fadeOut, rising: false,
+                      own: fadeOutRegion)
+        }
+
         // ------------------------------------------------------------ orientation
         // The transport bar below the plot carries the amber In/Out readouts; the
         // header above it has no amber. A vertically mirrored capture swaps them,
@@ -298,20 +406,10 @@ struct UICheck {
     /// Finds the playhead by locating the waveform panel and then the single
     /// fully-white cluster (the playhead marker triangle) inside it.
     private static func playheadColumn(bitmap: Bitmap) -> Int? {
-        var panelRows: [Int] = []
-        for y in 0..<bitmap.height {
-            var panelPixels = 0
-            for x in stride(from: 0, to: bitmap.width, by: 2) {
-                let (r, g, b) = bitmap.rgb(x, y)
-                if Ink.isPanelBackground(r, g, b) { panelPixels += 1 }
-            }
-            if panelPixels > bitmap.width / 20 { panelRows.append(y) }
-        }
-        guard let panelTop = panelRows.first, let panelBottom = panelRows.last,
-              panelBottom > panelTop else { return nil }
+        guard let band = panelBand(bitmap: bitmap) else { return nil }
 
         var whitePerColumn = [Int](repeating: 0, count: bitmap.width)
-        for y in panelTop...panelBottom {
+        for y in band.top...band.bottom {
             for x in 0..<bitmap.width {
                 let (r, g, b) = bitmap.rgb(x, y)
                 if Ink.isWhite(r, g, b) { whitePerColumn[x] += 1 }
@@ -336,6 +434,23 @@ struct UICheck {
         }
         guard let best, !best.isEmpty else { return nil }
         return best.reduce(0, +) / best.count
+    }
+
+    /// The waveform panel's vertical extent, found by its distinctive dark
+    /// blue-grey background. Shared so that envelope ink can be looked for inside
+    /// the panel and nowhere else.
+    private static func panelBand(bitmap: Bitmap) -> (top: Int, bottom: Int)? {
+        var panelRows: [Int] = []
+        for y in 0..<bitmap.height {
+            var panelPixels = 0
+            for x in stride(from: 0, to: bitmap.width, by: 2) {
+                let (r, g, b) = bitmap.rgb(x, y)
+                if Ink.isPanelBackground(r, g, b) { panelPixels += 1 }
+            }
+            if panelPixels > bitmap.width / 20 { panelRows.append(y) }
+        }
+        guard let top = panelRows.first, let bottom = panelRows.last, bottom > top else { return nil }
+        return (top, bottom)
     }
 
     /// Groups adjacent columns into cluster centres.

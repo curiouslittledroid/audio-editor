@@ -8,8 +8,9 @@ if you do not know it**.
 
 ```bash
 ./build.sh                 # required before anything else — see trap 1
-./tools/selftest.sh        # 40 checks: audio pipeline
-./tools/uitest.sh          # 52 checks: pixel assertions on the rendered window
+./tools/selftest.sh        # 95 checks: audio pipeline
+./tools/uitest.sh          # 75 checks: pixel assertions on the rendered window
+./tools/checkspecs.sh      # change specs still cite guarantees that exist
 ```
 
 Both suites must pass before claiming a change works. `./tools/uitest.sh` writes
@@ -40,6 +41,7 @@ Configuration therefore goes through the environment, mapped by `capture.sh`:
 | `AUDIOEDIT_SNAPSHOT` | output PNG path — **presence is what enables the harness** |
 | `AUDIOEDIT_FILE` | file to load |
 | `AUDIOEDIT_TRIM` | `start,end` |
+| `AUDIOEDIT_FADE` | `in,out` in seconds — applied *after* the trim, since fades clamp to the selection |
 | `AUDIOEDIT_PLAYHEAD` | seconds |
 | `AUDIOEDIT_UICHECK` | `1` to run pixel assertions |
 | `AUDIOEDIT_LOUD` / `_QUIET` | `a-b,c-d` time ranges expected loud/silent |
@@ -113,6 +115,20 @@ both `snapshot: wrote` and `CHECKS PASSED` in the log. Keep that property.
   `.tint` is not. The orientation check uses the fixed amber palette for this reason.
 - Prefer a criterion that is independent of what you are trying to measure:
   handles are found by contiguous-amber-run length, which needs no plot geometry.
+- **Check any new overlay against the existing classifiers before picking its colour.**
+  The fade envelope is magenta for exactly this reason: mint/cyan classified as
+  *waveform ink* and coral classified as *amber* (i.e. a trim handle), so either would
+  have silently corrupted the amplitude and handle checks rather than failing loudly.
+  The accent colour is the other hazard — the measured purple accent `(0.65, 0.31,
+  0.65)` initially matched the envelope classifier, which is why `Ink.isFade` bounds
+  `r > 0.80` and `b < r - 0.10`. Run a candidate through `Ink.isWaveform`,
+  `isAmber`, `isFade` and the accent colours before committing to it.
+- **A playhead parked exactly on a trim handle defeats handle detection.** Its opaque
+  marker splits that handle's amber into single-pixel slivers, which the cluster
+  minimum width then discards — reported as "found 1 full-height amber bars". The app
+  is fine; the heuristic is not. Note that `setTrimStart` drags the playhead forward,
+  so *not* setting `--playhead` is what parks it on the in-point handle. Set the
+  playhead explicitly in a case when the handles matter.
 
 ### 8. Xcode
 
@@ -126,16 +142,16 @@ package and needs no sudo.
 
 | File | Holds |
 | --- | --- |
-| `docs/specs/SPEC.md` | Behavioural contract `G1`–`G40` and the constraining assumptions `A1`–`A8`. Cite these numbers in change specs. |
+| `docs/specs/SPEC.md` | Behavioural contract `G1`–`G46` and the constraining assumptions `A1`–`A8`. Cite these numbers in change specs. |
 | `docs/specs/NNN-*.md` | Change specs against that baseline — each opens by naming the guarantees it alters. |
+| `AGENTS.md` (this file) | Traps, architecture invariants, deliberate decisions. |
+| `README.md` | What the app is and how to use it. |
 
 `./tools/checkspecs.sh` validates those specs: that cited `G`/`A` numbers exist (or are
 declared as new by that spec), that links resolve, and that the impact header is present.
 Renumbering a guarantee in `SPEC.md` silently invalidates every citation to it, so
-**append new guarantees as `G41`, `G42`, … and never renumber**; the checker also fails if
+**append new guarantees as `G47`, `G48`, … and never renumber**; the checker also fails if
 the baseline numbering stops being contiguous.
-| `AGENTS.md` (this file) | Traps, architecture invariants, deliberate decisions. |
-| `README.md` | What the app is and how to use it. |
 
 Before changing behaviour, check whether `docs/specs/SPEC.md` states it as a guarantee — if so,
 the change must update that guarantee rather than quietly invalidate it. If a change
@@ -169,6 +185,14 @@ Invariants worth preserving:
 - Trim points become frames in exactly one place —
   `TrimmedAudioExporter.frameRange(...)`. The tests call it too, so the exporter
   and its verification cannot disagree about rounding.
+- **The fade envelope exists in two places that must agree:** the exporter's
+  `fadeGain(atOffset:...)` works in frames, and `WaveformView.drawFadeEnvelope`
+  works in seconds. Both use inclusive endpoints (gain is exactly 0 at each end of
+  a fade), and the drawn shape is the continuous twin of the frame-domain ramp.
+  Change one without the other and the picture stops matching the file.
+- **No fades means the export loop is untouched.** `FadeSpec.isActive` gates the
+  whole thing, so `G46` holds by construction rather than by arithmetic that
+  happens to cancel out.
 - Export opens its own `AVAudioFile` and never shares the playback handle.
 
 ## Releasing

@@ -12,13 +12,16 @@ func aeLog(_ message: String) {
 /// Recording permission (the app captures its own window).
 ///
 ///   AudioEditor --snapshot out.png --file x.wav [--trim 1.0 4.0]
-///               [--playhead 2.0] [--loop] [--size 1000 580]
+///               [--fade 0.01,0.05] [--playhead 2.0] [--loop]
+///               [--size 1000 580]
 ///               [--banner error|info <text>] [--settle 1.0]
 struct SnapshotOptions {
     var outputPath: String
     var filePath: String?
     var trimStart: Double?
     var trimEnd: Double?
+    var fadeIn: Double?
+    var fadeOut: Double?
     var playhead: Double?
     var loop = false
     var size = CGSize(width: 1000, height: 580)
@@ -48,6 +51,13 @@ struct SnapshotOptions {
             if parts.count == 2 {
                 options.trimStart = parts[0]
                 options.trimEnd = parts[1]
+            }
+        }
+        if let raw = env["AUDIOEDIT_FADE"] {
+            let parts = raw.split(separator: ",").compactMap { Double($0) }
+            if parts.count == 2 {
+                options.fadeIn = parts[0]
+                options.fadeOut = parts[1]
             }
         }
         if let raw = env["AUDIOEDIT_PLAYHEAD"], let value = Double(raw) { options.playhead = value }
@@ -94,6 +104,10 @@ final class SnapshotController {
         }
         if let start = options.trimStart { model.setTrimStart(start) }
         if let end = options.trimEnd { model.setTrimEnd(end) }
+        // Deliberately after the trim: fades are clamped to half the selection,
+        // so the selection has to be in place before they can be applied.
+        if let fadeIn = options.fadeIn { model.setFadeIn(fadeIn) }
+        if let fadeOut = options.fadeOut { model.setFadeOut(fadeOut) }
         if let playhead = options.playhead { model.playhead = playhead }
         if options.loop { model.setLooping(true) }
 
@@ -177,6 +191,9 @@ final class SnapshotController {
         spec.trimEnd = options.trimEnd ?? 0
         spec.playhead = options.playhead ?? 0
         spec.duration = model?.duration ?? 0
+        spec.checkFades = options.fadeIn != nil || options.fadeOut != nil
+        spec.fadeIn = options.fadeIn ?? 0
+        spec.fadeOut = options.fadeOut ?? 0
 
         exit(UICheck.run(bitmap: bitmap, spec: spec, reporter: TestReporter()))
     }

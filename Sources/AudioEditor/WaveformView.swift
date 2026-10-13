@@ -27,7 +27,9 @@ private struct WaveGeometry {
     }
 }
 
-private enum WavePalette {
+/// Panel palette. Internal rather than private so the transport bar's fade
+/// fields can tint themselves with the same colour as the drawn envelope.
+enum WavePalette {
     static let background = Color(red: 0.075, green: 0.080, blue: 0.098)
     static let plotBackground = Color(red: 0.055, green: 0.059, blue: 0.075)
     static let waveform = Color(red: 0.36, green: 0.40, blue: 0.48)
@@ -38,6 +40,12 @@ private enum WavePalette {
     static let excluded = Color.black.opacity(0.45)
     static let excludedEdge = Color(red: 1.0, green: 0.42, blue: 0.38).opacity(0.75)
     static let handle = Color(red: 1.0, green: 0.70, blue: 0.25)
+    /// Magenta, deliberately neither blue-shifted nor amber. The UI checks
+    /// classify blue-shifted ink as waveform and long amber runs as trim
+    /// handles, so a fade drawn in either family would silently corrupt those
+    /// measurements. Magenta falls outside every existing classifier, and its
+    /// blend over the waveform still classifies as waveform.
+    static let fade = Color(red: 0.93, green: 0.38, blue: 0.70)
     static let playhead = Color.white
     static let label = Color.white.opacity(0.85)
 }
@@ -47,6 +55,8 @@ struct WaveformView: View {
     let duration: Double
     let trimStart: Double
     let trimEnd: Double
+    let fadeIn: Double
+    let fadeOut: Double
     let playhead: Double
     let isPlaying: Bool
 
@@ -159,6 +169,7 @@ struct WaveformView: View {
 
         drawCenterLine(in: &context, plot: plot)
         drawWaveform(in: &context, geometry: geometry, keptRect: keptRect)
+        drawFadeEnvelope(in: &context, geometry: geometry, startX: startX, endX: endX)
         drawExcludedRegions(in: &context, geometry: geometry, startX: startX, endX: endX)
         drawSelectionLabels(in: &context, geometry: geometry, startX: startX, endX: endX)
         drawHandles(in: &context, geometry: geometry, startX: startX, endX: endX)
@@ -258,6 +269,81 @@ struct WaveformView: View {
                 layer.clip(to: Path(keptRect))
                 layer.fill(path, with: .color(WavePalette.waveformSelected))
             }
+        }
+    }
+
+    /// Draws the applied gain as a cone at each faded boundary (G41, G44).
+    ///
+    /// The waveform itself is drawn from the unfaded peaks, so under a fade it
+    /// stays full height. That is only honest while the applied gain is shown
+    /// too — which is the whole point of this layer, and the resolution of A8's
+    /// warning about the display lying about the output.
+    ///
+    /// Only the faded regions are drawn, so a document with no fades looks
+    /// exactly as it did before this feature existed.
+    private func drawFadeEnvelope(in context: inout GraphicsContext,
+                                  geometry: WaveGeometry,
+                                  startX: CGFloat,
+                                  endX: CGFloat) {
+        let plot = geometry.plotRect
+        guard duration > 0, fadeIn > 0 || fadeOut > 0 else { return }
+        let amplitude = plot.height / 2 * 0.92
+
+        /// Continuous twin of the exporter's frame-domain envelope. The drawn
+        /// shape and the applied gain therefore cannot drift apart.
+        func gain(atTime time: Double) -> Double {
+            if fadeIn > 0, time < trimStart + fadeIn {
+                return min(1, max(0, (time - trimStart) / fadeIn))
+            }
+            if fadeOut > 0, time > trimEnd - fadeOut {
+                return min(1, max(0, (trimEnd - time) / fadeOut))
+            }
+            return 1
+        }
+
+        func ramp(from x0: CGFloat, to x1: CGFloat) {
+            let width = x1 - x0
+            guard width > 0.5 else { return }
+
+            let columns = max(2, Int(width))
+            var samples: [CGPoint] = []
+            for column in 0...columns {
+                let x = x0 + width * CGFloat(column) / CGFloat(columns)
+                let offset = CGFloat(gain(atTime: geometry.time(forX: x, duration: duration))) * amplitude
+                samples.append(CGPoint(x: x, y: offset))
+            }
+
+            var upper = Path()
+            var lower = Path()
+            var cone = Path()
+            for (index, sample) in samples.enumerated() {
+                let top = CGPoint(x: sample.x, y: plot.midY - sample.y)
+                let bottom = CGPoint(x: sample.x, y: plot.midY + sample.y)
+                if index == 0 {
+                    upper.move(to: top); lower.move(to: bottom); cone.move(to: top)
+                } else {
+                    upper.addLine(to: top); lower.addLine(to: bottom); cone.addLine(to: top)
+                }
+            }
+            for sample in samples.reversed() {
+                cone.addLine(to: CGPoint(x: sample.x, y: plot.midY + sample.y))
+            }
+            cone.closeSubpath()
+
+            context.fill(cone, with: .color(WavePalette.fade.opacity(0.18)))
+            // Both edges are stroked, not just filled: over a busy waveform a
+            // fill alone can read as part of the audio.
+            context.stroke(upper, with: .color(WavePalette.fade), lineWidth: 1.5)
+            context.stroke(lower, with: .color(WavePalette.fade), lineWidth: 1.5)
+        }
+
+        if fadeIn > 0 {
+            ramp(from: startX,
+                 to: geometry.x(forTime: min(trimEnd, trimStart + fadeIn), duration: duration))
+        }
+        if fadeOut > 0 {
+            ramp(from: geometry.x(forTime: max(trimStart, trimEnd - fadeOut), duration: duration),
+                 to: endX)
         }
     }
 

@@ -78,6 +78,27 @@ run_case ui-5-mono-24bit \
     --trim 3 9 \
     --playhead 6
 
+# ------------------------------------------------------------ 6. fade in / out
+# Same trim *and the same playhead* as ui-2, so fades are the only difference
+# between the two renders.
+#
+# The playhead is set explicitly on purpose. Left unset it defaults to 0 and
+# setTrimStart drags it forward to the trim start, parking it exactly on the
+# in-point handle — where its opaque marker splits that handle's amber into two
+# single-pixel slivers, and the handle detector's minimum cluster width discards
+# it. That is a limitation of the pixel heuristic, not of the app.
+#
+# The loud and quiet ranges are deliberately outside 1.0–1.25 and 4.25–4.5: the
+# drawn envelope caps the waveform profile there, so an amplitude assertion
+# inside a fade would be measuring the envelope rather than the audio.
+run_case ui-6-fades \
+    --file "$ROOT/TestAudio/bursts-44100-stereo16.wav" \
+    --trim 1.0 4.5 \
+    --fade 0.25,0.25 \
+    --playhead 2.5 \
+    --loud "1.3-1.45,3.05-3.35" \
+    --quiet "2.0-2.8"
+
 echo ""
 echo "############################################################"
 if [[ $FAILED -eq 0 ]]; then

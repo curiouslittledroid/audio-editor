@@ -80,7 +80,7 @@ zoom, undo, or render offline.
 | **G27** | Moving a boundary past the playhead drags the playhead along, so the playhead is always inside the selection or exactly on its edge. |
 | **G28** | Grabbing within 11 pt of a handle moves that handle; anywhere else on the waveform seeks. |
 | **G29** | A drag that begins as a handle drag stays that handle for its duration, even if the pointer moves away. |
-| **G30** | Reset restores the selection to the whole file. |
+| **G30** | Reset restores the selection to the whole file and clears both fades. |
 | **G31** | Trimming is non-destructive; nothing is written until an export. |
 
 ## Export
@@ -90,12 +90,27 @@ zoom, undo, or render offline.
 | **G32** | Writes a new file and never modifies the source. |
 | **G33** | Time in seconds becomes a frame range by rounding to the **nearest** sample, and that conversion happens in exactly one place so the exporter and its tests cannot disagree. |
 | **G34** | Sample rate, channel count, bit depth and endianness are preserved from the source; the container is always LinearPCM WAV. |
-| **G35** | Exported samples are identical to the source over the same range. |
+| **G35** | Exported samples are identical to the source over the same range, multiplied by the fade envelope, which is 1 outside the fade regions. With both fades at 0 ms the output is bit-identical to a no-fade export. |
 | **G36** | An empty selection is reported as an error, never a silent no-op or a zero-byte file. |
 | **G37** | Export runs off the main thread and the UI shows an in-progress state. |
 | **G38** | Export does not interrupt playback. |
 | **G39** | The suggested filename is `<base>-trimmed.wav`. |
 | **G40** | Success reports the saved name and duration and offers to reveal it in Finder. |
+
+## Fades
+
+| | Guarantee |
+| --- | --- |
+| **G41** | A fade multiplies every channel by the same linear gain ramp: fade-in rises 0→1 across `[trimStart, trimStart + fadeIn]`, fade-out falls 1→0 across `[trimEnd − fadeOut, trimEnd]`. Both endpoints are inclusive — the first sample of a fade-in is exactly 0, and the last sample of a fade-out is exactly 0. |
+| **G42** | Fades never overlap; each is clamped to at most half the selection, counted in frames. |
+| **G43** | Fade durations are re-clamped when the selection shrinks or a new file loads, so the field always displays the value actually applied. |
+| **G44** | The waveform panel draws the fade envelope using the same time-to-x mapping as the waveform, handles and playhead. |
+| **G45** | Samples outside the fade regions are unmodified. |
+| **G46** | With both fades at 0 ms, exported output is bit-identical to a no-fade export of the same selection. |
+
+**Not yet true:** fades are applied on export and drawn on the waveform, but they are
+**not audible during preview** — playback plays the unfaded source. Export, listen,
+adjust. Closing that is Phase 2 of `docs/specs/001-fade-in-out.md`.
 
 ---
 
@@ -113,7 +128,7 @@ an architectural change, not a feature.
 | **A5** | Peaks are computed once per load at a fixed resolution. | Zoom, or re-analysis on resize, needs a resolution pyramid and a cache keyed by zoom level. |
 | **A6** | The whole file is read to build peaks. | Analysis memory scales with duration × channels. Very long files will need streaming or a peak cache on disk. |
 | **A7** | Playback is realtime through the default output device. | Offline rendering, or output-device selection, breaks the "position comes from the render clock" model in `AudioEngineController`. |
-| **A8** | No audio processing at all. | Gain, fades and normalisation belong in the exporter's read loop; they must not be applied on the display path or the waveform will lie about the output. |
+| **A8** | **Exactly one kind of processing: linear fades at the selection boundaries.** | Everything else — gain, normalisation, EQ, compression — still belongs in the exporter's read loop and must still not be applied on the display path, or the waveform will lie about the output. Fades are the exception that proves the rule: they are drawn as an *envelope* rather than by rescaling the waveform, so the display still tells the truth about source amplitude and applied gain separately. |
 
 ---
 
@@ -123,8 +138,8 @@ Which guarantees an automated check actually enforces today.
 
 | Suite | Guarantees covered |
 | --- | --- |
-| `tools/selftest.sh` (64 checks) | G1–G5 (open/refuse semantics, incl. atomic adoption), G33–G36, G39 |
-| `tools/uitest.sh` (52 checks) | G10, G12 (waveform drawn and positioned in time), G24, G26, G28, G30 (handle positions), G15, G18 (playhead position) |
+| `tools/selftest.sh` (95 checks) | G1–G5 (open/refuse semantics, incl. atomic adoption), G33–G36, G39, G41–G43, G45–G46 |
+| `tools/uitest.sh` (75 checks) | G10, G12 (waveform drawn and positioned in time), G24, G26, G28, G30 (handle positions), G15, G18 (playhead position), G41, G44 (fade envelope present, positioned, and linear) |
 
 ### Not enforced by any check — regressions can slip through here
 
@@ -156,15 +171,17 @@ Documented rather than silently fixed, so they can be decided on deliberately.
 
 ## Using this with a change spec
 
-A change spec (for example `design/001-fade-in-out.md`) should open by naming what it
+A change spec (for example `docs/specs/001-fade-in-out.md`) should open by naming what it
 touches:
 
 ```
-Changes:    G13, G24 (selection gains an envelope), A1 unaffected
-Preserves:  G31 (still non-destructive), G34 (format unchanged)
-Adds:       G41 — a fade never writes samples outside the selection
+Changes:    G35 (samples are no longer unconditionally identical to the source),
+            G30 (Reset clears fades), A8 (the app now processes audio) — ARCHITECTURAL
+Preserves:  G24, G31 (still non-destructive), G33, G34 (format unchanged)
+Adds:       G41–G46
 Removes:    none
-New checks: selftest gains a fade round-trip; uitest gains a fade-shape assertion
+New checks: selftest gains the fade envelope, clamping and model-state checks;
+            uitest gains a fade-envelope rendering check
 ```
 
 If a proposal cannot say which guarantees it changes, it is not yet understood well

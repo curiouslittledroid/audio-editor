@@ -9,7 +9,7 @@ into a real `.app` bundle — no Xcode project required.
 
 > Working on the code? Read two files first:
 > **[docs/specs/SPEC.md](docs/specs/SPEC.md)** — the numbered behavioural contract
-> (G1–G40) plus the load-bearing assumptions (A1–A8) that change specs cite as their
+> (G1–G46) plus the load-bearing assumptions (A1–A8) that change specs cite as their
 > baseline. Proposed changes live in `docs/specs/NNN-*.md` and are validated against it
 > by `./tools/checkspecs.sh`.
 > **[AGENTS.md](AGENTS.md)** — the traps that are expensive to rediscover (stale
@@ -38,12 +38,24 @@ open "dist/Audio Editor.app"
 | Seek | Click or drag anywhere on the waveform |
 | Trim the start | Drag the **left amber handle**, or park the playhead and press **Set In** (`⌥I`) |
 | Trim the end | Drag the **right amber handle**, or press **Set Out** (`⌥O`) |
+| Fade in / out | Type a duration into the **FADE IN** / **FADE OUT** fields, in milliseconds |
 | Loop the selection | `⌘L`, or the ⟳ button |
 | Save the trim | `⌘E` / **Export Trimmed** → writes `<name>-trimmed.wav` |
 | Undo the trim | **Reset** (or `⇧⌘A`) |
 
 The kept region is drawn in blue; the parts that will be discarded are dimmed.
 `IN`, `OUT` and `KEPT` readouts along the bottom show the exact times.
+
+Fades are linear and anchored to the in/out points, drawn as a magenta envelope over
+the waveform. The waveform itself always shows the *source* amplitude, so the envelope
+is what tells you the gain being applied — the display deliberately never rescales the
+waveform to pretend the fade is baked in. Each fade is limited to half the selection so
+the two can never overlap, and shrinking the selection pulls the stored value down with
+it rather than quietly applying less than the field says.
+
+**Fades are heard only after export.** Playback previews the unfaded source, so the
+workflow is export → listen → adjust. Making them audible during preview is the
+outstanding half of [`docs/specs/001-fade-in-out.md`](docs/specs/001-fade-in-out.md).
 
 Export preserves the source sample rate, channel count, bit depth and endianness,
 and the written samples are verified sample-exact against the source.
@@ -158,11 +170,14 @@ swift tools/make-test-audio.swift   # once, to create TestAudio/
 Runs the whole read → analyse → export path over every fixture (16/24-bit,
 mono/stereo, 44.1/48 kHz, 0.35 s to 3 min): reading, waveform analysis, and an
 export round trip checking duration, preserved format, and sample-exact equality
-with the source over the trim range. 40 checks.
+with the source over the trim range. The fade checks cover the analytic envelope,
+exact silence at both endpoints, samples left untouched outside the fade regions,
+clamping, and the model-side state that keeps the field from overstating what will
+be applied. 95 checks.
 
 ### Visual regression — `./tools/uitest.sh`
 
-Renders the real window in five states and asserts on the resulting pixels. 52
+Renders the real window in six states and asserts on the resulting pixels. 75
 checks, no vision model, fully reproducible.
 
 - The plot area is discovered from the waveform's own pixels, so a layout shift
@@ -172,6 +187,10 @@ checks, no vision model, fully reproducible.
   silent — verifying the waveform is drawn *and* positioned correctly in time.
 - Both amber trim handles must land on the requested in/out times (measured
   accurate to ~0.03 s), and the playhead on its requested time.
+- The fade envelope must appear only across its own fade regions, and its drawn
+  height must be proportional to the fraction through the fade — the check that
+  distinguishes a linear ramp from an equal-power one, which would read ~71% at the
+  midpoint instead of 50%.
 - Amber ink must sit below the plot and not above it, which catches a vertically
   mirrored render — a real bug this caught during development.
 - Neither the header nor the transport bar may be blank.
@@ -201,6 +220,7 @@ that supports images, so it is not part of the pass/fail gate.
 ```bash
 ./tools/capture.sh <out.png> [options]
   --file <wav>         load a file          --trim <start> <end>
+  --fade <in>,<out>    linear fades in seconds at the trim boundaries
   --playhead <sec>     place the playhead   --loop
   --size <WxH>         window size          --banner "error:msg" | "info:msg"
   --uicheck            also run pixel assertions
@@ -237,3 +257,7 @@ would complicate any future App Store distribution).
 `.wav` (and `.wave`) input only, as a deliberate starting point. Other formats that
 `AVAudioFile` can read are a one-line change in `AudioDocumentModel.load` plus a
 wider `allowedContentTypes`; the UI, waveform and export paths are format-agnostic.
+
+Fades are **linear amplitude only**. Equal-power and dB-linear curves, crossfades
+between two regions, per-channel fades, and automation curves are all out of scope for
+now — `docs/specs/001-fade-in-out.md` records why each was left out.

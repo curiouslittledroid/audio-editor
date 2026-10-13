@@ -32,6 +32,9 @@ enum SelfTest {
         let corruptWAV = invalidDir.appendingPathComponent("corrupt.wav")
         let notAudio = invalidDir.appendingPathComponent("notes.txt")
 
+        testFades(source: first, reporter: reporter)
+        testFadeModelState(good: first, second: second, reporter: reporter)
+
         if FileManager.default.fileExists(atPath: corruptWAV.path) {
             testFailedLoadPreservesEngine(good: first, invalid: corruptWAV, reporter: reporter)
             testRefusedOpenPreservesDocument(good: first, second: second,
@@ -162,6 +165,278 @@ enum SelfTest {
                   model.trimStart == 0 && abs(model.trimEnd - model.duration) < 0.0001)
             check("successful open clears the error", model.errorMessage == nil)
             check("successful open resets the playhead", model.playhead == 0)
+        }
+    }
+
+    /// Reads an entire file into per-channel float arrays.
+    private static func readAllSamples(_ url: URL) throws -> (frames: Int, channels: [[Float]]) {
+        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let frames = Int(file.length)
+        let channelCount = Int(file.processingFormat.channelCount)
+        guard frames > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                            frameCapacity: AVAudioFrameCount(frames)) else {
+            return (0, [])
+        }
+        try file.read(into: buffer)
+        var channels = [[Float]]()
+        if let data = buffer.floatChannelData {
+            for channel in 0..<channelCount {
+                channels.append(Array(UnsafeBufferPointer(start: data[channel],
+                                                          count: Int(buffer.frameLength))))
+            }
+        }
+        return (Int(buffer.frameLength), channels)
+    }
+
+    /// docs/specs/001-fade-in-out.md G41–G46 — the envelope, its clamping, and the
+    /// guarantee that no fades means no change at all.
+    private static func testFades(source: URL, reporter: TestReporter) {
+        func check(_ label: String, _ condition: Bool, _ detail: String = "") {
+            reporter.check(label, condition, detail)
+        }
+        reporter.section("fade in / out (G41–G46)")
+
+        guard let header = try? AVAudioFile(forReading: source) else {
+            check("fixture opens", false)
+            return
+        }
+        let rate = header.fileFormat.sampleRate
+        let total = header.length
+
+        // A tenth of the file: small enough to stay cheap even on the long
+        // fixture, long enough to give thousands of frames to check.
+        let startSeconds = Double(total / 4) / rate
+        let endSeconds = Double(total * 35 / 100) / rate
+        let range = TrimmedAudioExporter.frameRange(forStart: startSeconds, end: endSeconds,
+                                                    sampleRate: rate, totalFrames: total)
+        let selection = range.end - range.start
+        guard selection > 100 else {
+            check("selection has frames", false, "\(selection)")
+            return
+        }
+
+        let fadeSeconds = Double(selection / 10) / rate
+        let spec = TrimmedAudioExporter.FadeSpec(fadeIn: fadeSeconds, fadeOut: fadeSeconds)
+        let counts = TrimmedAudioExporter.fadeFrameCounts(spec, sampleRate: rate,
+                                                          selectionFrames: selection)
+
+        let plain = FileManager.default.temporaryDirectory
+            .appendingPathComponent("selftest-plain-\(UUID().uuidString).wav")
+        let faded = FileManager.default.temporaryDirectory
+            .appendingPathComponent("selftest-faded-\(UUID().uuidString).wav")
+        defer {
+            try? FileManager.default.removeItem(at: plain)
+            try? FileManager.default.removeItem(at: faded)
+        }
+
+        do {
+            try TrimmedAudioExporter.export(sourceURL: source, to: plain,
+                                            start: startSeconds, end: endSeconds)
+            try TrimmedAudioExporter.export(sourceURL: source, to: faded,
+                                            start: startSeconds, end: endSeconds, fade: spec)
+        } catch {
+            check("fade export", false, "\(error)")
+            return
+        }
+
+        guard let reference = try? readAllSamples(plain),
+              let actual = try? readAllSamples(faded) else {
+            check("fade exports readable", false, "could not re-read the exports")
+            return
+        }
+        // The exporter works in Int64 frames; the checks index Swift arrays, so
+        // narrow once here rather than at every use.
+        let frames = Int(selection)
+        let fadeInFrames = Int(counts.fadeIn)
+        let fadeOutFrames = Int(counts.fadeOut)
+        guard reference.frames == frames, actual.frames == frames,
+              !reference.channels.isEmpty, !actual.channels.isEmpty else {
+            check("fade exports readable", false,
+                  "frames \(reference.frames)/\(actual.frames) vs \(frames)")
+            return
+        }
+        check("faded export keeps the frame count", actual.frames == frames,
+              "\(actual.frames) vs \(frames)")
+        check("faded export keeps the channel count",
+              actual.channels.count == reference.channels.count,
+              "\(actual.channels.count) vs \(reference.channels.count)")
+
+        // --- G41: the analytic envelope --------------------------------------
+        func gain(_ offset: Int) -> Float {
+            TrimmedAudioExporter.fadeGain(atOffset: AVAudioFramePosition(offset),
+                                          fadeInFrames: counts.fadeIn,
+                                          fadeOutFrames: counts.fadeOut,
+                                          totalFrames: selection)
+        }
+        // Both endpoints inclusive: exactly 0 at each end of each fade.
+        check("fade-in starts at exactly 0 gain", gain(0) == 0, "gain \(gain(0))")
+        check("fade-in reaches exactly 1 gain",
+              gain(fadeInFrames - 1) == 1, "gain \(gain(fadeInFrames - 1))")
+        check("fade-out starts at exactly 1 gain",
+              gain(frames - fadeOutFrames) == 1, "gain \(gain(frames - fadeOutFrames))")
+        check("fade-out ends at exactly 0 gain", gain(frames - 1) == 0,
+              "gain \(gain(frames - 1))")
+        check("midpoint between the fades is untouched",
+              gain(frames / 2) == 1, "gain \(gain(frames / 2))")
+
+        // Monotone up across the fade-in, monotone down across the fade-out.
+        var rises = true
+        for offset in 1..<fadeInFrames where gain(offset) < gain(offset - 1) { rises = false }
+        var falls = true
+        for offset in (frames - fadeOutFrames + 1)..<frames
+        where gain(offset) > gain(offset - 1) { falls = false }
+        check("fade-in rises monotonically", rises)
+        check("fade-out falls monotonically", falls)
+
+        // Linearity, which is what distinguishes this from an equal-power curve:
+        // an equal-power ramp reads ~0.71 at the midpoint instead of 0.5.
+        let halfFade = fadeInFrames / 2
+        let quarterFade = fadeInFrames / 4
+        if fadeInFrames > 8 {
+            check("fade-in is linear at 50%", abs(gain(halfFade) - 0.5) < 0.01,
+                  "gain \(gain(halfFade))")
+            check("fade-in is linear at 25%", abs(gain(quarterFade) - 0.25) < 0.02,
+                  "gain \(gain(quarterFade))")
+        }
+
+        // --- G41/G45: the exported samples -----------------------------------
+        var maxRelativeError: Double = 0
+        var comparedFrames = 0
+        for offset in 0..<frames {
+            let source0 = Double(reference.channels[0][offset])
+            guard abs(source0) > 0.01 else { continue }
+            comparedFrames += 1
+            let expected = source0 * Double(gain(offset))
+            maxRelativeError = max(maxRelativeError, abs(Double(actual.channels[0][offset]) - expected))
+        }
+        check("enough signal to compare", comparedFrames > 50, "\(comparedFrames) frames")
+        // Tolerance is one 16-bit quantisation step: the reference is quantised
+        // to disk, so an exact float comparison would fail for the wrong reason.
+        check("envelope matches the exported samples", maxRelativeError < 6.2e-5,
+              "max deviation \(String(format: "%.7f", maxRelativeError)) over \(comparedFrames) frames")
+
+        check("first exported sample is exactly silent", actual.channels[0][0] == 0,
+              "\(actual.channels[0][0])")
+        check("last exported sample is exactly silent",
+              actual.channels[0][frames - 1] == 0, "\(actual.channels[0][frames - 1])")
+
+        // G45: outside the fades the two exports must agree bit-for-bit. This is
+        // the check that catches an off-by-one in the frame maths.
+        var untouched = true
+        var firstChanged = -1
+        for offset in fadeInFrames..<(frames - fadeOutFrames)
+        where actual.channels[0][offset] != reference.channels[0][offset] {
+            untouched = false
+            if firstChanged < 0 { firstChanged = offset }
+        }
+        check("samples outside the fades are bit-identical", untouched,
+              firstChanged < 0 ? "" : "first difference at frame \(firstChanged)")
+
+        var channelsMatch = true
+        for channel in 1..<min(actual.channels.count, reference.channels.count) {
+            if actual.channels[channel] != reference.channels[channel] { channelsMatch = false }
+        }
+        check("every channel gets the same gain", channelsMatch)
+
+        // --- G42: clamping ----------------------------------------------------
+        let greedy = TrimmedAudioExporter.FadeSpec(fadeIn: Double(selection) / rate,
+                                                   fadeOut: Double(selection) / rate)
+        let clamped = TrimmedAudioExporter.fadeFrameCounts(greedy, sampleRate: rate,
+                                                          selectionFrames: selection)
+        let half = selection / 2
+        check("oversized fades clamp to half the selection",
+              clamped.fadeIn == half && clamped.fadeOut == half,
+              "\(clamped.fadeIn)+\(clamped.fadeOut) vs \(half) each")
+        check("clamped fades cannot overlap",
+              clamped.fadeIn + clamped.fadeOut <= selection,
+              "\(clamped.fadeIn)+\(clamped.fadeOut) > \(selection)")
+        let zero = TrimmedAudioExporter.fadeFrameCounts(.none, sampleRate: rate,
+                                                        selectionFrames: selection)
+        check("no fades resolve to no frames", zero.fadeIn == 0 && zero.fadeOut == 0)
+
+        // --- single-frame fade ------------------------------------------------
+        check("a one-frame fade silences exactly one sample",
+              TrimmedAudioExporter.fadeGain(atOffset: 0, fadeInFrames: 1, fadeOutFrames: 0,
+                                            totalFrames: selection) == 0
+                && TrimmedAudioExporter.fadeGain(atOffset: 1, fadeInFrames: 1, fadeOutFrames: 0,
+                                                 totalFrames: selection) == 1)
+
+        // --- G46: no fades means no change -----------------------------------
+        // Compared against the source rather than against another export, so this
+        // actually proves the default path is still a pure copy.
+        var maxCopyError: Double = 0
+        if let original = try? AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32,
+                                          interleaved: false),
+           let buffer = AVAudioPCMBuffer(pcmFormat: original.processingFormat,
+                                         frameCapacity: AVAudioFrameCount(selection)) {
+            original.framePosition = range.start
+            try? original.read(into: buffer)
+            if let data = buffer.floatChannelData {
+                for offset in 0..<min(Int(buffer.frameLength), frames) {
+                    let delta = abs(Double(data[0][offset]) - Double(reference.channels[0][offset]))
+                    maxCopyError = max(maxCopyError, delta)
+                }
+            }
+        }
+        check("an unfaded export still copies the source closely", maxCopyError < 1e-4,
+              "max deviation \(String(format: "%.7f", maxCopyError))")
+    }
+
+    /// docs/specs/SPEC.md G30 and G43 — the model-side fade state: clamping as the
+    /// selection shrinks, and Reset clearing fades.
+    ///
+    /// The exporter clamps too (G42), but that is invisible to the user. These
+    /// checks are about the value the field displays, which is the one that must
+    /// never overstate what will be applied.
+    private static func testFadeModelState(good: URL, second: URL?, reporter: TestReporter) {
+        func check(_ label: String, _ condition: Bool, _ detail: String = "") {
+            reporter.check(label, condition, detail)
+        }
+        reporter.section("fade model state (G30, G43)")
+
+        let model = AudioDocumentModel()
+        model.load(url: good)
+        check("fixture loads", waitUntil { !model.isAnalyzing && model.hasFile },
+              model.errorMessage ?? "")
+        guard model.hasFile else { return }
+
+        model.resetTrim()
+        let ceiling = model.maxFadeDuration
+        model.setFadeIn(ceiling * 4)
+        check("an oversized fade clamps to half the selection",
+              abs(model.fadeInDuration - ceiling) < 1e-9,
+              "\(model.fadeInDuration) vs \(ceiling)")
+
+        // Shrink the selection to 5% of the file. The stored fade must come down
+        // with it, because the field displays the stored value (G43).
+        model.setTrimStart(model.duration * 0.475)
+        model.setTrimEnd(model.duration * 0.525)
+        let shrunk = model.maxFadeDuration
+        check("shrinking the selection re-clamps the stored fade",
+              model.fadeInDuration <= shrunk + 1e-9 && model.fadeOutDuration <= shrunk + 1e-9,
+              "fades \(model.fadeInDuration) vs ceiling \(shrunk)")
+        check("the stored fade never exceeds what will be applied",
+              model.fadeSpec.fadeIn <= model.maxFadeDuration + 1e-9,
+              "\(model.fadeSpec.fadeIn) vs \(model.maxFadeDuration)")
+
+        model.setFadeIn(0)
+        model.setFadeOut(0.001)
+        check("a fade alone counts as an edit", model.hasFades && model.isEdited)
+
+        model.resetTrim()
+        check("Reset clears the fades",
+              !model.hasFades && model.fadeInDuration == 0 && model.fadeOutDuration == 0)
+        check("Reset also restores the whole selection",
+              model.trimStart == 0 && model.trimEnd == model.duration)
+        check("Reset leaves nothing edited", !model.isEdited)
+
+        if let second {
+            model.setFadeIn(0.001)
+            model.load(url: second)
+            check("loading a new file clears the fades",
+                  waitUntil { !model.isAnalyzing && model.fileURL == second } && !model.hasFades,
+                  "fade-in \(model.fadeInDuration)")
         }
     }
 

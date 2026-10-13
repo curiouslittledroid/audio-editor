@@ -40,12 +40,28 @@ final class AudioDocumentModel: ObservableObject {
     @Published var trimStart: Double = 0
     @Published var trimEnd: Double = 0
 
+    /// Linear fades at the selection boundaries, in seconds. Fades count as
+    /// edits, so they survive until Reset and they enable the Reset button.
+    @Published private(set) var fadeInDuration: Double = 0
+    @Published private(set) var fadeOutDuration: Double = 0
+
     /// Shortest allowed selection, roughly 5 ms.
     let minimumSelection: Double = 0.005
 
     var hasFile: Bool { fileURL != nil }
-    var isEdited: Bool { trimStart > 0.0005 || trimEnd < duration - 0.0005 }
+    var hasFades: Bool { fadeInDuration > 0 || fadeOutDuration > 0 }
+    var isEdited: Bool {
+        trimStart > 0.0005 || trimEnd < duration - 0.0005 || hasFades
+    }
     var trimmedDuration: Double { max(0, trimEnd - trimStart) }
+
+    /// A fade may occupy at most half the selection, so the two can never
+    /// overlap (G42).
+    var maxFadeDuration: Double { trimmedDuration / 2 }
+
+    var fadeSpec: TrimmedAudioExporter.FadeSpec {
+        TrimmedAudioExporter.FadeSpec(fadeIn: fadeInDuration, fadeOut: fadeOutDuration)
+    }
 
     var formatSummary: String {
         guard hasFile else { return "" }
@@ -118,6 +134,8 @@ final class AudioDocumentModel: ObservableObject {
         duration = engine.duration
         trimStart = 0
         trimEnd = engine.duration
+        fadeInDuration = 0
+        fadeOutDuration = 0
         playhead = 0
         isAnalyzing = true
 
@@ -170,6 +188,8 @@ final class AudioDocumentModel: ObservableObject {
         peaks = .empty
         trimStart = 0
         trimEnd = 0
+        fadeInDuration = 0
+        fadeOutDuration = 0
         playhead = 0
         isAnalyzing = false
     }
@@ -214,6 +234,7 @@ final class AudioDocumentModel: ObservableObject {
         guard let source = fileURL else { return }
         let start = trimStart
         let end = trimEnd
+        let fade = fadeSpec
         isExporting = true
         errorMessage = nil
         infoMessage = nil
@@ -223,7 +244,8 @@ final class AudioDocumentModel: ObservableObject {
                 try TrimmedAudioExporter.export(sourceURL: source,
                                                 to: destination,
                                                 start: start,
-                                                end: end)
+                                                end: end,
+                                                fade: fade)
             }
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -352,11 +374,13 @@ final class AudioDocumentModel: ObservableObject {
     func setTrimStart(_ value: Double) {
         trimStart = clamp(value, 0, max(0, trimEnd - minimumSelection))
         if playhead < trimStart { playhead = trimStart }
+        clampFades()
     }
 
     func setTrimEnd(_ value: Double) {
         trimEnd = clamp(value, min(duration, trimStart + minimumSelection), duration)
         if playhead > trimEnd { playhead = trimEnd }
+        clampFades()
     }
 
     /// Called when a handle drag finishes, so playback can be re-scheduled
@@ -383,8 +407,36 @@ final class AudioDocumentModel: ObservableObject {
     func resetTrim() {
         trimStart = 0
         trimEnd = duration
+        clearFades()
         playhead = clamp(playhead, 0, duration)
         commitTrimChangeWhilePlaying()
+    }
+
+    // MARK: - Fades
+
+    func setFadeIn(_ seconds: Double) {
+        guard seconds.isFinite else { return }
+        fadeInDuration = clamp(seconds, 0, maxFadeDuration)
+    }
+
+    func setFadeOut(_ seconds: Double) {
+        guard seconds.isFinite else { return }
+        fadeOutDuration = clamp(seconds, 0, maxFadeDuration)
+    }
+
+    func clearFades() {
+        fadeInDuration = 0
+        fadeOutDuration = 0
+    }
+
+    /// Re-clamps the stored durations after the selection shrinks. The stored
+    /// value is what the field displays, so it must always equal what will be
+    /// applied (G43) — a field that shows 500 ms while applying 100 ms would be
+    /// lying about the output.
+    private func clampFades() {
+        let limit = maxFadeDuration
+        if fadeInDuration > limit { fadeInDuration = limit }
+        if fadeOutDuration > limit { fadeOutDuration = limit }
     }
 
     func selectAll() {

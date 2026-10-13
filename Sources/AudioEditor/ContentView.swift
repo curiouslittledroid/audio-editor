@@ -21,7 +21,7 @@ struct ContentView: View {
                 dropOverlay
             }
         }
-        .frame(minWidth: 820, minHeight: 460)
+        .frame(minWidth: 920, minHeight: 460)
         .onDrop(of: [UTType.fileURL], isTargeted: $model.isDropTargeted) { providers in
             model.acceptDrop(providers: providers)
         }
@@ -132,6 +132,8 @@ struct ContentView: View {
                     duration: model.duration,
                     trimStart: model.trimStart,
                     trimEnd: model.trimEnd,
+                    fadeIn: model.fadeInDuration,
+                    fadeOut: model.fadeOutDuration,
                     playhead: model.playhead,
                     isPlaying: model.isPlaying,
                     onTrimStartChanged: { model.setTrimStart($0) },
@@ -257,6 +259,20 @@ struct ContentView: View {
                 statBox("KEPT", TimeFormat.duration(model.trimmedDuration), tint: .accentColor)
             }
 
+            Divider().frame(height: 22)
+
+            HStack(spacing: 8) {
+                fadeField("FADE IN", value: Binding(
+                    get: { model.fadeInDuration * 1000 },
+                    set: { model.setFadeIn($0 / 1000) }
+                ))
+                fadeField("FADE OUT", value: Binding(
+                    get: { model.fadeOutDuration * 1000 },
+                    set: { model.setFadeOut($0 / 1000) }
+                ))
+            }
+            .disabled(!model.hasFile)
+
             Spacer(minLength: 4)
 
             HStack(spacing: 6) {
@@ -275,6 +291,35 @@ struct ContentView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.bar)
+    }
+
+    /// Editable fade duration in milliseconds. Deliberately not a slider: the
+    /// point of a fade is precision (a 5 ms click-killer is not pickable by
+    /// hand). Editing while the selection is short visibly snaps to what will
+    /// actually be applied, because the stored value is itself clamped (G43).
+    private func fadeField(_ title: String, value: Binding<Double>) -> some View {
+        let tint = WavePalette.fade
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.system(size: 8.5, weight: .bold))
+                .foregroundStyle(.secondary)
+                .tracking(0.6)
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                TextField("", value: value, format: .number.precision(.fractionLength(0...1)))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(tint)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 42)
+                Text("ms")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 5))
+        .help("Linear fade at this boundary, in milliseconds. Limited to half the selection (\(TimeFormat.duration(model.maxFadeDuration))).")
     }
 
     private func statBox(_ title: String, _ value: String, tint: Color) -> some View {

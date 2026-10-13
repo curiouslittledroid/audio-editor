@@ -164,6 +164,24 @@ Invariants worth preserving:
   and its verification cannot disagree about rounding.
 - Export opens its own `AVAudioFile` and never shares the playback handle.
 
+## Releasing
+
+`tools/release.sh <version> [--draft|--publish]` builds a universal binary, packages
+it, and creates the GitHub release. Verified facts worth not re-deriving:
+
+- **Ad-hoc signing is not enough for distribution.** With the quarantine attribute a
+  browser adds, macOS *kills* the app (`Killed: 9`), not merely warns. The only fix
+  is a Developer ID signature plus notarisation.
+- **A DMG does not avoid quarantine.** The app is clean on the mounted volume but
+  picks quarantine up when dragged to /Applications.
+- **`spctl --assess` is not the test.** It reports `rejected` even for a copy that
+  launches fine — it assesses the signature, not the quarantine exception. To check
+  whether something will actually run, run it.
+- `ditto -c -k --sequesterRsrc --keepParent` is the correct way to archive a bundle;
+  plain `zip` can drop extended attributes and the signature.
+- Version stamps are applied to the *assembled* bundle, not to
+  `Resources/Info.plist`, so the template stays clean.
+
 ## A regression test you have not seen fail is not yet a test
 
 After adding a check, reintroduce the old behaviour and confirm the check **fails**.

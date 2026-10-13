@@ -46,6 +46,72 @@ The kept region is drawn in blue; the parts that will be discarded are dimmed.
 Export preserves the source sample rate, channel count, bit depth and endianness,
 and the written samples are verified sample-exact against the source.
 
+## Publishing a release
+
+```bash
+./tools/release.sh 1.0.0              # build + package + verify (no network access)
+./tools/release.sh 1.0.0 --draft      # also create a draft GitHub release to review
+./tools/release.sh 1.0.0 --publish    # create and publish it
+```
+
+Produces a **universal** (Apple Silicon + Intel) build in `dist/release/`: a `.dmg`
+with an Applications shortcut, a `.zip`, and `SHA256SUMS.txt`. The script verifies
+the signature, both architectures, the stamped version, the declared `.wav`
+handling and that the app actually launches before it packages anything.
+
+### The Gatekeeper problem — read before publishing
+
+The app is **ad-hoc signed**, because this machine has no Developer ID certificate.
+That means **every downloader will be blocked on first launch**. Measured on macOS
+26.5.1 with the quarantine attribute a browser adds:
+
+| Delivery | What happens |
+| --- | --- |
+| `.zip` | quarantine propagates to the extracted app; launching it gets `Killed: 9` |
+| `.dmg` | clean on the mounted volume, but the app gains quarantine when dragged out |
+| after approval | runs normally |
+
+macOS shows *"Apple cannot check 'Audio Editor' for malicious software"*. The user
+must approve it once via **System Settings → Privacy & Security → Open Anyway**.
+Control-click → Open is no longer part of Apple's documented flow.
+
+A technical user can instead clear the attribute, which is verified to work:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Audio Editor.app"
+```
+
+Beware when testing this yourself: `spctl --assess` keeps reporting `rejected` even
+for a copy that launches fine, because it assesses the signature rather than the
+per-file quarantine exception. Judge by whether the app runs.
+
+### Removing that friction
+
+Only a **Developer ID signature plus notarisation** avoids the prompt, which needs an
+Apple Developer Program membership (US$99/year):
+
+1. Obtain a *Developer ID Application* certificate.
+2. `export SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"` — `build.sh`
+   then signs with the hardened runtime instead of ad-hoc, and fails loudly if the
+   identity is wrong rather than quietly producing an ad-hoc build.
+3. Notarise and staple:
+   ```bash
+   xcrun notarytool store-credentials <profile>        # once
+   xcrun notarytool submit dist/release/AudioEditor-1.0.0-macos-universal.zip \
+       --keychain-profile <profile> --wait
+   xcrun stapler staple "dist/Audio Editor.app"
+   ```
+
+Steps 2–3 are documented rather than automated, because neither can be tested on a
+machine without a certificate.
+
+### Or just ship the source
+
+For a project this size, `git clone && ./build.sh release run` takes about ten
+seconds and sidesteps the trust question entirely. If asking people to override
+their security settings is unappealing, linking to the source may be the better
+default.
+
 ## Layout
 
 ```
@@ -68,6 +134,7 @@ tools/
   make-test-audio.swift       generates the .wav fixtures
   selftest.sh                 runs the audio pipeline checks
   uitest.sh                   runs the visual regression checks
+  release.sh                  packages and publishes a GitHub release
   capture.sh                  renders one PNG of any state
   inspect.sh                  sends a PNG to a vision model for a written critique
 ```

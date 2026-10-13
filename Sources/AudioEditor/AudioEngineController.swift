@@ -19,6 +19,11 @@ final class AudioEngineController {
     /// previous segment are ignored.
     private var generation = 0
 
+    /// Number of full playback passes currently queued for looping. Used to keep
+    /// two passes in flight so the loop stays gapless when a pass is a composite
+    /// of buffers and segments. Reset on every stop/start.
+    private var loopQueuedPasses = 0
+
     /// Called on the main queue when a non-looping segment reaches its end.
     var onReachedEnd: (() -> Void)?
 
@@ -87,6 +92,7 @@ final class AudioEngineController {
     /// handlers via the generation token.
     private func teardownEngine() {
         generation += 1
+        loopQueuedPasses = 0
         player?.stop()
         engine?.stop()
         if let player, let engine {
@@ -99,12 +105,116 @@ final class AudioEngineController {
 
     // MARK: - Transport
 
+    // MARK: - Scheduling a pass
+
+    /// One element of a playback pass. A pass with no fades is a single
+    /// `segment`; a faded pass is `[buffer head][segment middle][buffer tail]`.
+    ///
+    /// Exposed (rather than private) so the self test can inspect the exact
+    /// audio that preview will play, which is the only way to verify an audible
+    /// fade without an output device.
+    enum PlaybackItem {
+        case buffer(AVAudioPCMBuffer)
+        case segment(startFrame: AVAudioFramePosition, frameCount: AVAudioFrameCount)
+    }
+
+    /// Builds the ordered items for one pass of `[startFrame, startFrame + frameCount)`.
+    ///
+    /// With both fades at zero this is a single segment — the pre-fade path, which
+    /// `G46` holds in place. When a fade is active the head and/or tail are read
+    /// into PCM buffers and the envelope applied there, so memory is proportional
+    /// to the *fade length*, not the selection.
+    static func playbackItems(file: AVAudioFile,
+                              startFrame: AVAudioFramePosition,
+                              frameCount: AVAudioFramePosition,
+                              fade: TrimmedAudioExporter.FadeSpec) -> [PlaybackItem] {
+        guard frameCount > 0 else { return [] }
+
+        let fades = TrimmedAudioExporter.fadeFrameCounts(fade,
+                                                         sampleRate: file.processingFormat.sampleRate,
+                                                         selectionFrames: frameCount)
+        // No fades ⇒ exactly the old single-segment schedule. Not a segment of
+        // equal size: the same call, so nothing about playback changes.
+        guard fades.fadeIn > 0 || fades.fadeOut > 0 else {
+            return [.segment(startFrame: startFrame, frameCount: AVAudioFrameCount(frameCount))]
+        }
+
+        var items: [PlaybackItem] = []
+        if fades.fadeIn > 0,
+           let head = fadedBuffer(file: file,
+                                  readFrom: startFrame,
+                                  bufferFrames: fades.fadeIn,
+                                  selectionOffset: 0,
+                                  fadeInFrames: fades.fadeIn,
+                                  fadeOutFrames: fades.fadeOut,
+                                  totalFrames: frameCount) {
+            items.append(.buffer(head))
+        }
+
+        let middleFrames = frameCount - fades.fadeIn - fades.fadeOut
+        if middleFrames > 0 {
+            items.append(.segment(startFrame: startFrame + fades.fadeIn,
+                                  frameCount: AVAudioFrameCount(middleFrames)))
+        }
+
+        if fades.fadeOut > 0,
+           let tail = fadedBuffer(file: file,
+                                  readFrom: startFrame + frameCount - fades.fadeOut,
+                                  bufferFrames: fades.fadeOut,
+                                  selectionOffset: frameCount - fades.fadeOut,
+                                  fadeInFrames: fades.fadeIn,
+                                  fadeOutFrames: fades.fadeOut,
+                                  totalFrames: frameCount) {
+            items.append(.buffer(tail))
+        }
+
+        // A failed read must not silently play an unfaded pass; fall back to the
+        // plain segment so the audio is at least correct in extent.
+        guard !items.isEmpty else {
+            return [.segment(startFrame: startFrame, frameCount: AVAudioFrameCount(frameCount))]
+        }
+        return items
+    }
+
+    /// Reads `bufferFrames` frames and scales them by the shared envelope.
+    private static func fadedBuffer(file: AVAudioFile,
+                                    readFrom startFrame: AVAudioFramePosition,
+                                    bufferFrames: AVAudioFramePosition,
+                                    selectionOffset: AVAudioFramePosition,
+                                    fadeInFrames: AVAudioFramePosition,
+                                    fadeOutFrames: AVAudioFramePosition,
+                                    totalFrames: AVAudioFramePosition) -> AVAudioPCMBuffer? {
+        guard bufferFrames > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                            frameCapacity: AVAudioFrameCount(bufferFrames)) else {
+            return nil
+        }
+        file.framePosition = startFrame
+        do {
+            try file.read(into: buffer, frameCount: AVAudioFrameCount(bufferFrames))
+        } catch {
+            return nil
+        }
+        guard buffer.frameLength > 0 else { return nil }
+        TrimmedAudioExporter.applyFade(to: buffer,
+                                       offset: selectionOffset,
+                                       fadeInFrames: fadeInFrames,
+                                       fadeOutFrames: fadeOutFrames,
+                                       totalFrames: totalFrames)
+        return buffer
+    }
+
     /// Starts playback of `start...end`, optionally looping the range.
-    func play(from start: Double, to end: Double, looping: Bool) {
+    ///
+    /// `fade` is applied to the *preview* audio. With both fades at zero this is
+    /// byte-for-byte the original single-segment schedule.
+    func play(from start: Double, to end: Double, looping: Bool,
+              fade: TrimmedAudioExporter.FadeSpec = .none) {
         guard let player, let file else { return }
 
         generation += 1
         let token = generation
+        loopQueuedPasses = 0
 
         player.stop()
 
@@ -117,57 +227,89 @@ final class AudioEngineController {
         segmentEndFrame = endFrame
         isLooping = looping
 
-        let frames = AVAudioFrameCount(frameCount)
+        let items = Self.playbackItems(file: file,
+                                       startFrame: startFrame,
+                                       frameCount: frameCount,
+                                       fade: fade)
+        guard !items.isEmpty else { return }
 
         if looping {
-            // `scheduleSegment` has no `.loops` option, so queue two copies and
-            // top the queue back up from each completion handler. Keeping one
-            // segment queued ahead makes the loop gapless.
-            scheduleLoopingSegment(token: token, startFrame: startFrame, frameCount: frames)
-            scheduleLoopingSegment(token: token, startFrame: startFrame, frameCount: frames)
+            // Queue two passes and top the queue back up from each completed
+            // pass, so the loop never drains even when a pass is short because
+            // both fades are large fractions of the selection.
+            schedulePass(token: token, items: items, looping: true)
+            schedulePass(token: token, items: items, looping: true)
         } else {
-            player.scheduleSegment(file,
-                                   startingFrame: startFrame,
-                                   frameCount: frames,
-                                   at: nil,
-                                   completionCallbackType: .dataPlayedBack) { [weak self] _ in
-                DispatchQueue.main.async {
-                    guard let self, self.generation == token else { return }
-                    self.onReachedEnd?()
-                }
-            }
+            schedulePass(token: token, items: items, looping: false)
         }
 
         player.play()
     }
 
-    /// Schedules one pass of the loop and re-arms itself once that pass is
-    /// handed to the output, so the queue never drains.
-    private func scheduleLoopingSegment(token: Int,
-                                        startFrame: AVAudioFramePosition,
-                                        frameCount: AVAudioFrameCount) {
-        guard let player, let file, generation == token else { return }
-        player.scheduleSegment(file,
-                               startingFrame: startFrame,
-                               frameCount: frameCount,
-                               at: nil,
-                               completionCallbackType: .dataRendered) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self, self.generation == token else { return }
-                self.scheduleLoopingSegment(token: token,
-                                            startFrame: startFrame,
-                                            frameCount: frameCount)
+    /// Schedules every item of one pass. Only the last item carries a completion
+    /// handler: it either re-arms the loop or reports the end of playback.
+    private func schedulePass(token: Int, items: [PlaybackItem], looping: Bool) {
+        guard let player, let file, generation == token, !items.isEmpty else { return }
+        loopQueuedPasses += 1
+
+        for (index, item) in items.enumerated() {
+            let isLast = index == items.count - 1
+            let callbackType: AVAudioPlayerNodeCompletionCallbackType =
+                looping ? .dataRendered : .dataPlayedBack
+
+            let handler: AVAudioPlayerNodeCompletionHandler? = isLast
+                ? { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self, self.generation == token else { return }
+                        self.loopQueuedPasses = max(0, self.loopQueuedPasses - 1)
+                        if looping {
+                            // Top the queue back up so two passes stay in flight.
+                            if self.loopQueuedPasses < 2 {
+                                self.schedulePass(token: token, items: items, looping: true)
+                            }
+                        } else {
+                            self.onReachedEnd?()
+                        }
+                    }
+                }
+                : nil
+
+            switch item {
+            case .buffer(let buffer):
+                if isLast {
+                    player.scheduleBuffer(buffer,
+                                          completionCallbackType: callbackType,
+                                          completionHandler: handler)
+                } else {
+                    player.scheduleBuffer(buffer)
+                }
+            case .segment(let startFrame, let frameCount):
+                if isLast {
+                    player.scheduleSegment(file,
+                                           startingFrame: startFrame,
+                                           frameCount: frameCount,
+                                           at: nil,
+                                           completionCallbackType: callbackType,
+                                           completionHandler: handler)
+                } else {
+                    player.scheduleSegment(file,
+                                           startingFrame: startFrame,
+                                           frameCount: frameCount,
+                                           at: nil)
+                }
             }
         }
     }
 
     func pause() {
         generation += 1
+        loopQueuedPasses = 0
         player?.pause()
     }
 
     func stop() {
         generation += 1
+        loopQueuedPasses = 0
         player?.stop()
     }
 

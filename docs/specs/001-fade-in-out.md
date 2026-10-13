@@ -3,8 +3,8 @@
 **Baseline:** [`SPEC.md`](SPEC.md) — this spec was written against `G1`–`G40`. The
 changes below have since been applied, so the contract now runs to `G46` and `A8` reads
 differently.
-**Status:** **Phase 1 implemented.** Fades are applied on export and drawn on the
-waveform. Phase 2 — audible preview — is outstanding.
+**Status:** **Fully implemented.** Phase 1 (export + envelope) and Phase 2 (audible
+preview) have both landed.
 **Date:** 2026-10-13
 
 ```
@@ -12,7 +12,7 @@ Changes:    G35 (samples are no longer unconditionally identical to the source)
             G30 (Reset also clears fades)
             A8  (the app now performs exactly one kind of processing) — ARCHITECTURAL
 Preserves:  G24, G31, G33, G34, G36–G40, G12, G26–G29, A1
-Adds:       G41–G46 (below)
+Adds:       G41–G47 (below)
 Removes:    none
 New checks: selftest gains fade-envelope, clamping and no-op checks;
             uitest gains a fade-envelope rendering check
@@ -114,15 +114,16 @@ This is the one genuine fork, and it should be decided rather than defaulted.
 **Phase 1 alone means a deaf workflow**: export, listen, adjust, re-export. For a
 trimming tool whose purpose is auditioning before committing, that is a real gap.
 
-Recommendation: **do both**, but land them as separate changes, because Phase 1 is
-independently useful and testable while Phase 2 is the only part that can regress
-playback.
+**Decided: do both**, landed as separate changes. Phase 1 was independently useful and
+testable while Phase 2 was the only part that could regress playback. With Phase 2 in
+place, setting a fade while playing re-schedules the pass from the current position, so
+the fade is heard as it is set rather than on the next loop.
 
-Phase 2 mechanism, for the record: pre-render only the faded head and tail into PCM
+Phase 2 mechanism, as implemented: pre-render only the faded head and tail into PCM
 buffers and schedule `[faded head][middle segment][faded tail]`, topping the queue up as
 the existing loop already does. Memory is proportional to the *fade length*, not the
-selection, so it stays bounded on a three-minute file. When both fades are 0, use the
-existing pure-segment path untouched (`G46` guarantees the outputs agree).
+selection, so it stays bounded on a three-minute file. When both fades are 0, the
+existing pure-segment path is used untouched (`G46` guarantees the outputs agree).
 
 ## Guarantee edits
 
@@ -157,6 +158,7 @@ in one place), `G34` (format unchanged), `G36`–`G40`, `G12`, `G26`–`G29`, an
 | **G44** | The waveform panel draws the fade envelope using the same time-to-x mapping as the waveform, handles and playhead. |
 | **G45** | Samples outside the fade regions are unmodified. |
 | **G46** | With both fades at 0 ms, exported output is bit-identical to an export of the same selection with no fades. |
+| **G47** | Playback applies the same fade envelope as export, so a fade is audible during preview. With both fades at 0 ms the single-segment schedule is used unchanged. |
 
 ## Acceptance criteria
 
@@ -241,8 +243,27 @@ slivers, which the handle detector's minimum cluster width then discards — rep
 drags the playhead forward, so *omitting* `--playhead` is what parks it there. Recorded
 in `AGENTS.md` and in `uitest.sh`.
 
-### Still open (Phase 2)
+## Delivered (Phase 2) — audible preview
 
-Audible preview, by the mechanism sketched above. Until then a fade is silent during
-audition and the workflow is export → listen → adjust, which `SPEC.md` and `README.md`
-now both state plainly rather than leaving the user to discover it.
+| | |
+| --- | --- |
+| Scheduling | `AudioEngineController.play(from:to:looping:fade:)` now carries a `FadeSpec`. `playbackItems(file:startFrame:frameCount:fade:)` composes one pass; with no fade it is a single segment, byte-for-byte the old schedule. |
+| Envelope | `TrimmedAudioExporter.applyFade` is shared between exporter and engine, so there is one implementation of the ramp rather than two that can drift. |
+| Live edit | Changing a fade while playing re-schedules the pass from the current playhead (`rescheduleForFadeChange`). |
+| Looping | Two passes are kept queued; each completed pass tops the queue back up, preserving the gapless behaviour of the original single-segment loop. |
+| Checks | `testFadePreview` verifies pass composition (head + middle + tail covers the selection exactly), that the head/tail buffers carry the analytic envelope, that the single-segment path is used when unfaded, and that clamping carries through. selftest 95 → 115. |
+
+### What differed from the plan (Phase 2)
+
+- **The audible path is verified by inspecting the scheduled pass, not by rendering
+audio.** There is no output device in the test environment, and `AVAudioEngine`'s
+offline mode cannot share the realtime graph the app uses. Since `play` schedules
+exactly what `playbackItems` returns, checking the items checks the preview. This was
+confirmed load-bearing in two ways: forcing the unfaded schedule produced "a faded pass
+is head + middle + tail — 1 items", and composing the buffers without applying the
+envelope produced five failures including "preview fade-in starts at exactly silent —
+0.0853".
+- **Clamping leaves a single frame of unattenuated audio for odd-length selections.**
+Each fade floors at `L/2`, so `L` odd leaves `L − 2·floor(L/2) = 1` frame between them.
+That is correct and matches export exactly; the check asserts "no substantive middle"
+(≤ 1 frame) rather than a zero middle.

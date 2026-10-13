@@ -53,9 +53,10 @@ waveform to pretend the fade is baked in. Each fade is limited to half the selec
 the two can never overlap, and shrinking the selection pulls the stored value down with
 it rather than quietly applying less than the field says.
 
-**Fades are heard only after export.** Playback previews the unfaded source, so the
-workflow is export → listen → adjust. Making them audible during preview is the
-outstanding half of [`docs/specs/001-fade-in-out.md`](docs/specs/001-fade-in-out.md).
+Fades are also **audible during preview**: playback plays a `[faded head][middle][faded
+tail]` pass, so setting a fade while playing re-schedules from the current position and
+you hear it immediately. The full change is recorded in
+[`docs/specs/001-fade-in-out.md`](docs/specs/001-fade-in-out.md).
 
 Export preserves the source sample rate, channel count, bit depth and endianness,
 and the written samples are verified sample-exact against the source.
@@ -173,7 +174,9 @@ export round trip checking duration, preserved format, and sample-exact equality
 with the source over the trim range. The fade checks cover the analytic envelope,
 exact silence at both endpoints, samples left untouched outside the fade regions,
 clamping, and the model-side state that keeps the field from overstating what will
-be applied. 95 checks.
+be applied. Preview checks verify the exact pass playback schedules — the faded head
+and tail carry the analytic envelope, and the whole pass covers the selection with no
+gap or overlap. 115 checks.
 
 ### Visual regression — `./tools/uitest.sh`
 

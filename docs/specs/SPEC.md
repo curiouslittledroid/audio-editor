@@ -107,10 +107,9 @@ zoom, undo, or render offline.
 | **G44** | The waveform panel draws the fade envelope using the same time-to-x mapping as the waveform, handles and playhead. |
 | **G45** | Samples outside the fade regions are unmodified. |
 | **G46** | With both fades at 0 ms, exported output is bit-identical to a no-fade export of the same selection. |
+| **G47** | Playback applies the same fade envelope as export, so a fade is audible during preview. A pass is scheduled as `[faded head][middle segment][faded tail]`, using the one `fadeGain`/`applyFade` implementation the exporter uses; with both fades at 0 ms the single-segment schedule is used unchanged. |
 
-**Not yet true:** fades are applied on export and drawn on the waveform, but they are
-**not audible during preview** — playback plays the unfaded source. Export, listen,
-adjust. Closing that is Phase 2 of `docs/specs/001-fade-in-out.md`.
+Fades are applied on export, drawn on the waveform, **and heard during preview**.
 
 ---
 
@@ -138,7 +137,7 @@ Which guarantees an automated check actually enforces today.
 
 | Suite | Guarantees covered |
 | --- | --- |
-| `tools/selftest.sh` (95 checks) | G1–G5 (open/refuse semantics, incl. atomic adoption), G33–G36, G39, G41–G43, G45–G46 |
+| `tools/selftest.sh` (115 checks) | G1–G5 (open/refuse semantics, incl. atomic adoption), G33–G36, G39, G41–G43, G45–G47 |
 | `tools/uitest.sh` (75 checks) | G10, G12 (waveform drawn and positioned in time), G24, G26, G28, G30 (handle positions), G15, G18 (playhead position), G41, G44 (fade envelope present, positioned, and linear) |
 
 ### Not enforced by any check — regressions can slip through here

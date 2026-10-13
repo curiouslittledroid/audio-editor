@@ -8,7 +8,7 @@ if you do not know it**.
 
 ```bash
 ./build.sh                 # required before anything else — see trap 1
-./tools/selftest.sh        # 95 checks: audio pipeline
+./tools/selftest.sh        # 115 checks: audio pipeline
 ./tools/uitest.sh          # 75 checks: pixel assertions on the rendered window
 ./tools/checkspecs.sh      # change specs still cite guarantees that exist
 ```
@@ -176,8 +176,12 @@ Invariants worth preserving:
 - Playback position is `segmentStartFrame + playerTime.sampleTime`, taken modulo
   the segment length when looping.
 - `AVAudioPlayerNode.scheduleSegment` has **no `options:` parameter** (only
-  `scheduleBuffer` does), so loop-forever is implemented by queueing one segment
-  ahead from the completion handler rather than with a `.loops` flag.
+  `scheduleBuffer` does), so loop-forever is implemented by queueing passes from the
+  completion handler rather than with a `.loops` flag. A pass is the item list from
+  `AudioEngineController.playbackItems` — one segment when no fade is set, or
+  `[faded head][middle segment][faded tail]` when one is. Two passes are kept in
+  flight; the last item of each completed pass tops the queue back up. Do not drop
+  to one pass: a heavily faded pass is short and the loop will gap.
 - **A failed open must not modify state.** `AudioEngineController.load` prepares the
   replacement into locals and commits at the end; `AudioDocumentModel.load` does not
   clear anything until the engine has accepted the file. Reordering this back to
@@ -185,15 +189,19 @@ Invariants worth preserving:
 - Trim points become frames in exactly one place —
   `TrimmedAudioExporter.frameRange(...)`. The tests call it too, so the exporter
   and its verification cannot disagree about rounding.
-- **The fade envelope exists in two places that must agree:** the exporter's
-  `fadeGain(atOffset:...)` works in frames, and `WaveformView.drawFadeEnvelope`
-  works in seconds. Both use inclusive endpoints (gain is exactly 0 at each end of
-  a fade), and the drawn shape is the continuous twin of the frame-domain ramp.
-  Change one without the other and the picture stops matching the file.
-- **No fades means the export loop is untouched.** `FadeSpec.isActive` gates the
-  whole thing, so `G46` holds by construction rather than by arithmetic that
-  happens to cancel out.
-- Export opens its own `AVAudioFile` and never shares the playback handle.
+- **The fade envelope exists in two forms that must agree:** `TrimmedAudioExporter.fadeGain`
+  works in frames (shared by the exporter and the preview engine, so there is one
+  implementation of the ramp), and `WaveformView.drawFadeEnvelope` works in seconds.
+  Both use inclusive endpoints (gain is exactly 0 at each end of a fade), and the drawn
+  shape is the continuous twin of the frame-domain ramp. Change one without the other
+  and the picture stops matching the file.
+- **No fades means neither the export loop nor the playback schedule is touched.**
+  `FadeSpec.isActive` gates the export loop, and `playbackItems` returns a single
+  `segment` rather than a composite pass, so `G46` holds by construction rather than by
+  arithmetic that happens to cancel out.
+- Export opens its own `AVAudioFile` and never shares the playback handle. Preview
+  buffers are read before any `scheduleSegment` call, which also mutates the file
+  pointer — read the head/tail first, or the middle can play the wrong audio.
 
 ## Releasing
 

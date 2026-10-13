@@ -302,7 +302,7 @@ final class AudioDocumentModel: ObservableObject {
         if playhead < trimStart || playhead >= trimEnd - 0.001 {
             playhead = trimStart
         }
-        engine.play(from: playhead, to: trimEnd, looping: isLooping)
+        engine.play(from: playhead, to: trimEnd, looping: isLooping, fade: fadeSpec)
         isPlaying = true
         startPlayheadTimer()
     }
@@ -336,7 +336,7 @@ final class AudioDocumentModel: ObservableObject {
         if playhead >= trimEnd - 0.001 {
             playhead = trimStart
         }
-        engine.play(from: playhead, to: trimEnd, looping: isLooping)
+        engine.play(from: playhead, to: trimEnd, looping: isLooping, fade: fadeSpec)
         isPlaying = true
     }
 
@@ -344,7 +344,7 @@ final class AudioDocumentModel: ObservableObject {
         isLooping = looping
         guard isPlaying else { return }
         let resume = clampToTrim(playhead)
-        engine.play(from: resume, to: trimEnd, looping: isLooping)
+        engine.play(from: resume, to: trimEnd, looping: isLooping, fade: fadeSpec)
         isPlaying = true
     }
 
@@ -390,7 +390,7 @@ final class AudioDocumentModel: ObservableObject {
         if playhead < trimStart || playhead >= trimEnd - 0.001 {
             playhead = trimStart
         }
-        engine.play(from: playhead, to: trimEnd, looping: isLooping)
+        engine.play(from: playhead, to: trimEnd, looping: isLooping, fade: fadeSpec)
         isPlaying = true
     }
 
@@ -416,17 +416,36 @@ final class AudioDocumentModel: ObservableObject {
 
     func setFadeIn(_ seconds: Double) {
         guard seconds.isFinite else { return }
-        fadeInDuration = clamp(seconds, 0, maxFadeDuration)
+        let updated = clamp(seconds, 0, maxFadeDuration)
+        guard updated != fadeInDuration else { return }
+        fadeInDuration = updated
+        rescheduleForFadeChange()
     }
 
     func setFadeOut(_ seconds: Double) {
         guard seconds.isFinite else { return }
-        fadeOutDuration = clamp(seconds, 0, maxFadeDuration)
+        let updated = clamp(seconds, 0, maxFadeDuration)
+        guard updated != fadeOutDuration else { return }
+        fadeOutDuration = updated
+        rescheduleForFadeChange()
     }
 
     func clearFades() {
+        guard hasFades else { return }
         fadeInDuration = 0
         fadeOutDuration = 0
+        rescheduleForFadeChange()
+    }
+
+    /// Fades are audible, so changing one while playing re-schedules the pass
+    /// from the current position ("hear it as you set it"). The engine builds a
+    /// fresh `[head][middle][tail]` pass, so the change takes effect immediately
+    /// rather than on the next loop.
+    private func rescheduleForFadeChange() {
+        guard isPlaying else { return }
+        let resume = clampToTrim(playhead)
+        engine.play(from: resume, to: trimEnd, looping: isLooping, fade: fadeSpec)
+        isPlaying = true
     }
 
     /// Re-clamps the stored durations after the selection shrinks. The stored

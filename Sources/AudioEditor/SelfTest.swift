@@ -34,6 +34,7 @@ enum SelfTest {
 
         testFades(source: first, reporter: reporter)
         testFadeModelState(good: first, second: second, reporter: reporter)
+        testFadePreview(source: first, reporter: reporter)
 
         if FileManager.default.fileExists(atPath: corruptWAV.path) {
             testFailedLoadPreservesEngine(good: first, invalid: corruptWAV, reporter: reporter)
@@ -437,6 +438,193 @@ enum SelfTest {
             check("loading a new file clears the fades",
                   waitUntil { !model.isAnalyzing && model.fileURL == second } && !model.hasFades,
                   "fade-in \(model.fadeInDuration)")
+        }
+    }
+
+    /// docs/specs/001-fade-in-out.md — audible preview (Phase 2).
+    ///
+    /// Verifies the exact audio a playback pass will emit, without an output
+    /// device: `playbackItems` is the same function `AudioEngineController.play`
+    /// schedules from, so checking it is checking the preview. The faded parts
+    /// must be envelopes of the source, must cover the selection exactly with no
+    /// gap or overlap, and the no-fade case must compose to one segment.
+    private static func testFadePreview(source: URL, reporter: TestReporter) {
+        func check(_ label: String, _ condition: Bool, _ detail: String = "") {
+            reporter.check(label, condition, detail)
+        }
+        reporter.section("fade preview scheduling (G41, G46)")
+
+        guard let file = try? AVAudioFile(forReading: source, commonFormat: .pcmFormatFloat32,
+                                          interleaved: false) else {
+            check("fixture opens", false)
+            return
+        }
+        let rate = file.processingFormat.sampleRate
+        let total = file.length
+        let range = TrimmedAudioExporter.frameRange(forStart: Double(total / 4) / rate,
+                                                    end: Double(total * 45 / 100) / rate,
+                                                    sampleRate: rate, totalFrames: total)
+        let frameCount = range.end - range.start
+        guard frameCount > 100 else {
+            check("selection has frames", false, "\(frameCount)")
+            return
+        }
+
+        // Read the selection *before* playbackItems moves the file pointer.
+        var original: [Float] = []
+        if let selection = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                            frameCapacity: AVAudioFrameCount(frameCount)) {
+            file.framePosition = range.start
+            try? file.read(into: selection, frameCount: AVAudioFrameCount(frameCount))
+            if let channel = selection.floatChannelData?[0] {
+                original = Array(UnsafeBufferPointer(start: channel, count: Int(selection.frameLength)))
+            }
+        }
+        guard original.count == Int(frameCount) else {
+            check("selection re-readable for comparison", false, "\(original.count) vs \(frameCount)")
+            return
+        }
+
+        let fadeSeconds = Double(frameCount / 10) / rate
+        let spec = TrimmedAudioExporter.FadeSpec(fadeIn: fadeSeconds, fadeOut: fadeSeconds)
+        let counts = TrimmedAudioExporter.fadeFrameCounts(spec, sampleRate: rate,
+                                                          selectionFrames: frameCount)
+        let fadeInFrames = Int(counts.fadeIn)
+        let fadeOutFrames = Int(counts.fadeOut)
+
+        // --- structural: head + middle + tail covers the selection exactly ---
+        let items = AudioEngineController.playbackItems(file: file, startFrame: range.start,
+                                                        frameCount: frameCount, fade: spec)
+        check("a faded pass is head + middle + tail", items.count == 3, "\(items.count) items")
+        guard items.count == 3 else { return }
+
+        guard case .buffer(let head) = items[0],
+              case .segment(let middleStart, let middleCount) = items[1],
+              case .buffer(let tail) = items[2] else {
+            check("pass order is buffer, segment, buffer", false)
+            return
+        }
+
+        check("head buffer is the fade-in length", Int(head.frameLength) == fadeInFrames,
+              "\(head.frameLength) vs \(fadeInFrames)")
+        check("tail buffer is the fade-out length", Int(tail.frameLength) == fadeOutFrames,
+              "\(tail.frameLength) vs \(fadeOutFrames)")
+        check("middle segment starts after the fade-in",
+              middleStart == range.start + counts.fadeIn,
+              "\(middleStart) vs \(range.start + counts.fadeIn)")
+        let covered = Int(head.frameLength) + Int(middleCount) + Int(tail.frameLength)
+        check("the pass covers the selection exactly, with no gap or overlap",
+              covered == Int(frameCount), "\(covered) vs \(frameCount)")
+
+        // --- the envelope is actually applied in the preview -----------------
+        guard let headSamples = head.floatChannelData?[0],
+              let tailSamples = tail.floatChannelData?[0] else {
+            check("faded buffers have samples", false)
+            return
+        }
+        check("preview fade-in starts at exactly silent", headSamples[0] == 0,
+              "\(headSamples[0])")
+        check("preview fade-out ends at exactly silent",
+              tailSamples[fadeOutFrames - 1] == 0, "\(tailSamples[fadeOutFrames - 1])")
+
+        func gain(_ offset: Int) -> Float {
+            TrimmedAudioExporter.fadeGain(atOffset: AVAudioFramePosition(offset),
+                                          fadeInFrames: counts.fadeIn,
+                                          fadeOutFrames: counts.fadeOut,
+                                          totalFrames: frameCount)
+        }
+        var maxHeadError: Float = 0
+        for offset in 0..<fadeInFrames {
+            maxHeadError = max(maxHeadError,
+                               abs(headSamples[offset] - original[offset] * gain(offset)))
+        }
+        var maxTailError: Float = 0
+        for offset in 0..<fadeOutFrames {
+            let absolute = Int(frameCount) - fadeOutFrames + offset
+            maxTailError = max(maxTailError,
+                               abs(tailSamples[offset] - original[absolute] * gain(absolute)))
+        }
+        // Tolerance is a 16-bit quantisation step: the fixture is quantised to disk.
+        check("preview fade-in applies the analytic envelope", maxHeadError < 6.2e-5,
+              "max deviation \(maxHeadError)")
+        check("preview fade-out applies the analytic envelope", maxTailError < 6.2e-5,
+              "max deviation \(maxTailError)")
+
+        // The attenuation must be real: at the fade-in midpoint the preview is
+        // about half the source, not a copy of it. This is the check that fails
+        // if the fade is silently dropped from the preview path.
+        let midpoint = fadeInFrames / 2
+        if abs(original[midpoint]) > 0.05 {
+            let ratio = abs(headSamples[midpoint] / original[midpoint])
+            check("preview fade-in midpoint is attenuated to ~0.5",
+                  abs(ratio - 0.5) < 0.02, "ratio \(ratio)")
+        } else {
+            check("midpoint has signal to measure attenuation", false,
+                  "source \(original[midpoint])")
+        }
+
+        // Endpoints are inclusive, so the interior edge of each buffer is unattenuated.
+        check("the fade-in reaches full gain at its last sample",
+              headSamples[fadeInFrames - 1] == original[fadeInFrames - 1])
+        check("the fade-out starts at full gain",
+              tailSamples[0] == original[Int(frameCount) - fadeOutFrames])
+
+        // --- G46: no fades still composes to the original single segment ----
+        let plain = AudioEngineController.playbackItems(file: file, startFrame: range.start,
+                                                        frameCount: frameCount, fade: .none)
+        check("an unfaded pass is a single segment", plain.count == 1, "\(plain.count) items")
+        if plain.count == 1, case .segment(let plainStart, let plainCount) = plain[0] {
+            check("the unfaded segment is the whole selection",
+                  plainStart == range.start && plainCount == AVAudioFrameCount(frameCount),
+                  "\(plainStart)+\(plainCount) vs \(range.start)+\(frameCount)")
+        }
+
+        // One-sided fades stay one-sided: no zero-length buffer is manufactured.
+        let inOnly = AudioEngineController.playbackItems(
+            file: file, startFrame: range.start, frameCount: frameCount,
+            fade: TrimmedAudioExporter.FadeSpec(fadeIn: fadeSeconds))
+        check("a fade-in alone is head + middle", inOnly.count == 2, "\(inOnly.count) items")
+
+        // --- clamping carries through to the preview -------------------------
+        let greedy = TrimmedAudioExporter.FadeSpec(fadeIn: Double(frameCount) / rate,
+                                                   fadeOut: Double(frameCount) / rate)
+        let greedyItems = AudioEngineController.playbackItems(file: file, startFrame: range.start,
+                                                              frameCount: frameCount, fade: greedy)
+        var greedyCovered = 0
+        var greedyMiddle = 0
+        for item in greedyItems {
+            switch item {
+            case .buffer(let buffer): greedyCovered += Int(buffer.frameLength)
+            case .segment(_, let count): greedyCovered += Int(count); greedyMiddle += Int(count)
+            }
+        }
+        // Each fade clamps to floor(L/2), so an odd selection can leave a single
+        // frame between them — but never a substantive middle.
+        check("a fully faded pass has no substantive middle", greedyMiddle <= 1,
+              "\(greedyMiddle) middle frames across \(greedyItems.count) items")
+        check("a fully faded pass still covers the selection exactly",
+              greedyCovered == Int(frameCount), "\(greedyCovered) vs \(frameCount)")
+
+        // --- the composite pass is schedulable against a real engine ---------
+        // Composing the items correctly means nothing if the player rejects the
+        // mixed buffer/segment schedule, so drive the real scheduling path once.
+        let controller = AudioEngineController()
+        do {
+            try controller.load(url: source)
+            controller.play(from: Double(range.start) / rate,
+                            to: Double(range.end) / rate,
+                            looping: false, fade: spec)
+            check("a faded pass starts playing", controller.isPlaying)
+            controller.stop()
+            check("stopping ends a faded pass", !controller.isPlaying)
+
+            controller.play(from: Double(range.start) / rate,
+                            to: Double(range.end) / rate,
+                            looping: true, fade: spec)
+            check("a looping faded pass starts playing", controller.isPlaying)
+            controller.stop()
+        } catch {
+            check("faded preview is schedulable", false, "\(error)")
         }
     }
 

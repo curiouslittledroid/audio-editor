@@ -73,7 +73,10 @@ enum TrimmedAudioExporter {
     /// Scales a buffer in place. Every channel gets the same gain (`G41`), and
     /// samples outside the fade regions are skipped, not multiplied by 1.0, so
     /// they are bit-identical to an unfaded export (`G45`).
-    private static func applyFade(to buffer: AVAudioPCMBuffer,
+    ///
+    /// Shared with `AudioEngineController` so preview and export apply the very
+    /// same envelope; there is one implementation of the ramp, not two.
+    static func applyFade(to buffer: AVAudioPCMBuffer,
                                   offset: AVAudioFramePosition,
                                   fadeInFrames: AVAudioFramePosition,
                                   fadeOutFrames: AVAudioFramePosition,

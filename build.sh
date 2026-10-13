@@ -48,6 +48,11 @@ if [[ -f "$PROJECT_ROOT/Resources/AppIcon.icns" ]]; then
     cp "$PROJECT_ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 fi
 
+# MIT requires the licence text to travel with copies of the software, so the
+# distributed bundle carries it. Copied before signing, since the signature
+# covers the bundle contents.
+cp "$PROJECT_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE.txt"
+
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # Stamp versions into the assembled copy only, so the plist in Resources/ stays

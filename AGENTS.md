@@ -215,5 +215,10 @@ for judgement calls (does it read well?) — it needs the OpenRouter key in
   gave two windows.
 - **macOS 15 floor**, needed for `defaultLaunchBehavior(.presented)`, without which
   a launch carrying a file comes up with no window.
+- **MIT licensed.** Chosen over Apache-2.0 (no patent exposure in a waveform trimmer)
+  and over copyleft (the goal is adoption, and GPL-3 would complicate App Store
+  distribution later). The licence text is copied into the bundle at
+  `Contents/Resources/LICENSE.txt` *before* codesigning — the signature covers bundle
+  contents, so adding it afterwards would invalidate the signature.
 - **No `-suppress-warnings`.** The build is warning-free; keep it that way rather
   than hiding new ones.

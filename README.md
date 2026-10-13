@@ -209,6 +209,18 @@ that supports images, so it is not part of the pass/fail gate.
 > "open this document", which puts the process into a launch mode where SwiftUI's
 > `WindowGroup` never creates a window — so the harness silently never ran.
 
+## Licence
+
+[MIT](LICENSE) © 2026 curiouslittledroid.
+
+Free to use, modify and redistribute, including commercially. The only requirement is
+that the copyright notice and licence text travel with the software, which is why the
+built `.app` carries a copy at `Contents/Resources/LICENSE.txt`. There is no warranty.
+
+MIT rather than Apache-2.0 (patents are not a concern for a waveform trimmer) and
+rather than a copyleft licence (you want people to download and use this, and GPL-3
+would complicate any future App Store distribution).
+
 ## Requirements
 
 - macOS 15 or later (`defaultLaunchBehavior(.presented)` is used to guarantee the

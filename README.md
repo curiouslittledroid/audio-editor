@@ -8,8 +8,9 @@ Built with SwiftUI + AVFoundation, compiled by Swift Package Manager, and wrappe
 into a real `.app` bundle — no Xcode project required.
 
 > Working on the code? Read two files first:
-> **[SPEC.md](SPEC.md)** — the numbered behavioural contract (G1–G40) plus the
-> load-bearing assumptions (A1–A8) that change specs cite as their baseline.
+> **[docs/specs/SPEC.md](docs/specs/SPEC.md)** — the numbered behavioural contract
+> (G1–G40) plus the load-bearing assumptions (A1–A8) that change specs cite as their
+> baseline, with proposed changes in `docs/specs/`.
 > **[AGENTS.md](AGENTS.md)** — the traps that are expensive to rediscover (stale
 > bundles, why test config can't go on the command line, window-capture flipping,
 > `AVAudioFile.read` at EOF).
@@ -127,7 +128,8 @@ Sources/AudioEditor/
   SelfTest.swift              headless audio pipeline checks
   UICheck.swift               pixel assertions on the rendered window
   TestReporter.swift          shared pass/fail reporting
-SPEC.md                       behavioural contract G1-G40, assumptions A1-A8
+docs/specs/SPEC.md            behavioural contract G1-G40, assumptions A1-A8
+                              docs/specs/001-*.md  change specs against that baseline
 AGENTS.md                     traps, architecture invariants, deliberate decisions
 tools/
   common.sh                   shared env: paths + Swift toolchain selection

@@ -56,7 +56,7 @@ enum SelfTest {
         return condition()
     }
 
-    /// SPEC.md G5: the engine must keep the current file when a new one cannot be
+    /// docs/specs/SPEC.md G5: the engine must keep the current file when a new one cannot be
     /// opened, and must still be able to play it.
     private static func testFailedLoadPreservesEngine(good: URL, invalid: URL, reporter: TestReporter) {
         func check(_ label: String, _ condition: Bool, _ detail: String = "") {
@@ -101,7 +101,7 @@ enum SelfTest {
         })
     }
 
-    /// SPEC.md G4: refusing a file must leave the document exactly as it was —
+    /// docs/specs/SPEC.md G4: refusing a file must leave the document exactly as it was —
     /// same file, selection, playhead and waveform — and a successful open must
     /// still fully replace it.
     private static func testRefusedOpenPreservesDocument(good: URL, second: URL?,

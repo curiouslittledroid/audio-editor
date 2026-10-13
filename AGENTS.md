@@ -126,11 +126,12 @@ package and needs no sudo.
 
 | File | Holds |
 | --- | --- |
-| `SPEC.md` | Behavioural contract `G1`–`G40` and the constraining assumptions `A1`–`A8`. Cite these numbers in change specs. |
+| `docs/specs/SPEC.md` | Behavioural contract `G1`–`G40` and the constraining assumptions `A1`–`A8`. Cite these numbers in change specs. |
+| `docs/specs/NNN-*.md` | Change specs against that baseline — each opens by naming the guarantees it alters. |
 | `AGENTS.md` (this file) | Traps, architecture invariants, deliberate decisions. |
 | `README.md` | What the app is and how to use it. |
 
-Before changing behaviour, check whether `SPEC.md` states it as a guarantee — if so,
+Before changing behaviour, check whether `docs/specs/SPEC.md` states it as a guarantee — if so,
 the change must update that guarantee rather than quietly invalidate it. If a change
 alters an `A`-row assumption, treat it as architectural and say so.
 

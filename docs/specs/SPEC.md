@@ -17,7 +17,7 @@ against something.
   point of the table.
 
 Architecture, code layout, build mechanics and testing traps live in
-[AGENTS.md](AGENTS.md), not here.
+[AGENTS.md](../../AGENTS.md), not here.
 
 ---
 

@@ -96,7 +96,7 @@ try writeWAV(path: "\(outDir)/long-44100-stereo16.wav", sampleRate: 44_100, chan
 
 // ---------------------------------------------------------------------------
 // Intentionally invalid inputs, used to prove that a refused open leaves the
-// current document untouched (SPEC.md G4). These live in a subdirectory so the
+// current document untouched (docs/specs/SPEC.md G4). These live in a subdirectory so the
 // `TestAudio/*.wav` glob in selftest.sh never feeds them to the analyser.
 // ---------------------------------------------------------------------------
 

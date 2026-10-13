@@ -10,7 +10,8 @@ into a real `.app` bundle — no Xcode project required.
 > Working on the code? Read two files first:
 > **[docs/specs/SPEC.md](docs/specs/SPEC.md)** — the numbered behavioural contract
 > (G1–G40) plus the load-bearing assumptions (A1–A8) that change specs cite as their
-> baseline, with proposed changes in `docs/specs/`.
+> baseline. Proposed changes live in `docs/specs/NNN-*.md` and are validated against it
+> by `./tools/checkspecs.sh`.
 > **[AGENTS.md](AGENTS.md)** — the traps that are expensive to rediscover (stale
 > bundles, why test config can't go on the command line, window-capture flipping,
 > `AVAudioFile.read` at EOF).
@@ -137,6 +138,7 @@ tools/
   selftest.sh                 runs the audio pipeline checks
   uitest.sh                   runs the visual regression checks
   release.sh                  packages and publishes a GitHub release
+  checkspecs.sh               validates change specs against the baseline contract
   capture.sh                  renders one PNG of any state
   inspect.sh                  sends a PNG to a vision model for a written critique
 ```

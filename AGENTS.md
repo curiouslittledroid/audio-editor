@@ -128,6 +128,12 @@ package and needs no sudo.
 | --- | --- |
 | `docs/specs/SPEC.md` | Behavioural contract `G1`–`G40` and the constraining assumptions `A1`–`A8`. Cite these numbers in change specs. |
 | `docs/specs/NNN-*.md` | Change specs against that baseline — each opens by naming the guarantees it alters. |
+
+`./tools/checkspecs.sh` validates those specs: that cited `G`/`A` numbers exist (or are
+declared as new by that spec), that links resolve, and that the impact header is present.
+Renumbering a guarantee in `SPEC.md` silently invalidates every citation to it, so
+**append new guarantees as `G41`, `G42`, … and never renumber**; the checker also fails if
+the baseline numbering stops being contiguous.
 | `AGENTS.md` (this file) | Traps, architecture invariants, deliberate decisions. |
 | `README.md` | What the app is and how to use it. |
 

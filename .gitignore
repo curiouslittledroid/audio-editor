@@ -1,0 +1,16 @@
+# Build products
+.build/
+dist/
+
+# Generated audio fixtures — regenerate with: swift tools/make-test-audio.swift
+# (selftest.sh does this automatically when they are missing)
+TestAudio/
+
+# Rendered test screenshots and logs from tools/uitest.sh
+TestOutput/
+
+# macOS
+.DS_Store
+
+# Screen captures (macOS names them "Screenshot <date> at <time>.png")
+Screenshot*.png

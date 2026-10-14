@@ -180,7 +180,7 @@ gap or overlap. 123 checks.
 
 ### Visual regression — `./tools/uitest.sh`
 
-Renders the real window in six states and asserts on the resulting pixels. 75
+Renders the real window in seven states and asserts on the resulting pixels. 102
 checks, no vision model, fully reproducible.
 
 - The plot area is discovered from the waveform's own pixels, so a layout shift
@@ -188,6 +188,9 @@ checks, no vision model, fully reproducible.
 - Waveform bar height per column is measured outwards from the plot's vertical
   midline, and compared against times where each fixture is known to be loud vs.
   silent — verifying the waveform is drawn *and* positioned correctly in time.
+- One case renders at the minimum window width and asserts the In/Out readouts
+  stay on a single line, so a squeezed bottom bar cannot silently wrap its
+  numbers.
 - Both amber trim handles must land on the requested in/out times (measured
   accurate to ~0.03 s), and the playhead on its requested time.
 - The fade envelope must appear only across its own fade regions, and its drawn

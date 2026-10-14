@@ -99,6 +99,17 @@ run_case ui-6-fades \
     --loud "1.3-1.45,3.05-3.35" \
     --quiet "2.0-2.8"
 
+# ------------------------------------------------------- 7. minimum width
+# The transport bar must still show its numbers on one line when the window is
+# at its minimum. Before the layout fix the In/Out values wrapped onto two lines
+# here; UICheck detects that as two amber row-bands.
+run_case ui-7-min-width \
+    --file "$ROOT/TestAudio/bursts-44100-stereo16.wav" \
+    --trim 1.0 4.5 \
+    --fade 0.25,0.25 \
+    --playhead 2.5 \
+    --size 920x480
+
 echo ""
 echo "############################################################"
 if [[ $FAILED -eq 0 ]]; then

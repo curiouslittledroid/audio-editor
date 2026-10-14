@@ -138,7 +138,7 @@ Which guarantees an automated check actually enforces today.
 | Suite | Guarantees covered |
 | --- | --- |
 | `tools/selftest.sh` (123 checks) | G1–G5 (open/refuse semantics, incl. atomic adoption), G17 (loop range survives a mid-selection resume), G33–G36, G39, G41–G43, G45–G47 |
-| `tools/uitest.sh` (75 checks) | G10, G12 (waveform drawn and positioned in time), G24, G26, G28, G30 (handle positions), G15, G18 (playhead position), G41, G44 (fade envelope present, positioned, and linear) |
+| `tools/uitest.sh` (102 checks) | G10, G12 (waveform drawn and positioned in time), G24, G26, G28, G30 (handle positions), G15, G18 (playhead position), G41, G44 (fade envelope present, positioned, and linear), and — beyond any listed guarantee — that the transport readouts stay on one line at the minimum window width |
 
 ### Not enforced by any check — regressions can slip through here
 
@@ -154,7 +154,6 @@ Which guarantees an automated check actually enforces today.
 Closing the playback rows is the cheapest high-value testing win: `AudioEngineController`
 exposes `currentTime` and the segment bounds, so the range, restart and loop behaviour
 are all assertable headlessly without a window.
-
 ---
 
 ## Known warts

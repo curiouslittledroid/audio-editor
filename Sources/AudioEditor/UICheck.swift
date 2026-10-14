@@ -392,6 +392,15 @@ struct UICheck {
                        amberBelow > 500 && amberBelow > amberAbove * 2,
                        "amber ink above plot=\(amberAbove), below plot=\(amberBelow)")
 
+        // ------------------------------------------------ transport readouts fit
+        // The In/Out values are amber, which is hardcoded (not the user-
+        // configurable accent), so they are a stable thing to measure. Each value
+        // must sit on a single text line: when the transport bar is squeezed, a
+        // value wraps and its amber row-profile splits into two bands — and the
+        // cluster narrows to roughly half its width. This is the regression guard
+        // for the bottom bar wrapping its numbers at the minimum window width.
+        checkTransportReadoutsSingleLine(bitmap: bitmap, reporter: reporter)
+
         // ---------------------------------------------------------------- chrome
         let headerFraction = litFraction(rows: abovePlot)
         let transportFraction = litFraction(rows: belowPlot)
@@ -434,6 +443,79 @@ struct UICheck {
         }
         guard let best, !best.isEmpty else { return nil }
         return best.reduce(0, +) / best.count
+    }
+
+    /// Verifies the amber `IN`/`OUT` values in the transport bar each occupy one
+    /// text line. A squeezed bar wraps them onto two, which is visible as two
+    /// amber row-bands (and about half the horizontal span).
+    ///
+    /// Anchored to the waveform panel's bottom, not the waveform ink extent: the
+    /// amber trim handles reach lower than the loudest waveform bar, so starting
+    /// at the waveform bottom would measure the handles rather than the readouts.
+    private static func checkTransportReadoutsSingleLine(bitmap: Bitmap,
+                                                         reporter: TestReporter) {
+        guard let panel = panelBand(bitmap: bitmap), panel.bottom + 1 < bitmap.height else {
+            reporter.check("transport bar located", false, "no waveform panel found")
+            return
+        }
+        let band = (panel.bottom + 1)..<bitmap.height
+
+        var amberColumns: [Int] = []
+        for x in 0..<bitmap.width {
+            for y in band {
+                let (r, g, b) = bitmap.rgb(x, y)
+                if Ink.isAmber(r, g, b) { amberColumns.append(x); break }
+            }
+        }
+        guard amberColumns.count > 8 else {
+            reporter.check("transport readouts found", false,
+                           "no amber ink below the panel")
+            return
+        }
+
+        // Group amber columns into the In and Out value blocks.
+        var clusters: [[Int]] = [[amberColumns[0]]]
+        for x in amberColumns.dropFirst() {
+            if x - clusters[clusters.count - 1].last! <= 14 {
+                clusters[clusters.count - 1].append(x)
+            } else {
+                clusters.append([x])
+            }
+        }
+        let blocks = clusters.filter { $0.count >= 8 }
+        guard blocks.count >= 2 else {
+            reporter.check("both In and Out readouts found", false,
+                           "\(blocks.count) amber block(s)")
+            return
+        }
+
+        var wrapped: [String] = []
+        for block in blocks {
+            var bands = 0
+            var inBand = false
+            var gap = 0
+            for y in band {
+                let hasAmber = block.contains { x in
+                    let (r, g, b) = bitmap.rgb(x, y)
+                    return Ink.isAmber(r, g, b)
+                }
+                if hasAmber {
+                    if !inBand { bands += 1; inBand = true }
+                    gap = 0
+                } else if inBand {
+                    gap += 1
+                    if gap >= 5 { inBand = false }
+                }
+            }
+            if bands != 1 {
+                wrapped.append("x\(block.first!)–\(block.last!): \(bands) lines")
+            }
+        }
+        reporter.check("In/Out readouts are single-line (numbers do not wrap)",
+                       wrapped.isEmpty,
+                       wrapped.isEmpty
+                           ? "\(blocks.count) block(s) \(blocks.map { "\($0.first!)–\($0.last!)" }.joined(separator: ", ")), one line each"
+                           : wrapped.joined(separator: ", "))
     }
 
     /// The waveform panel's vertical extent, found by its distinctive dark

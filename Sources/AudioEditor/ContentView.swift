@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -212,8 +213,27 @@ struct ContentView: View {
 
     // MARK: - Transport bar
 
+    /// Fixed width for the playhead readout, sized to the widest timestamp this
+    /// file can display (`0:00.000`, `10:00.000` or `1:00:00.000`). A fixed
+    /// width keeps the `/` from jittering as digits change; sizing it to the
+    /// text rather than a flat 96 pt removes the dead gap that used to push the
+    /// transport bar onto two lines at the minimum window width.
+    private var playheadReadoutWidth: CGFloat {
+        let probe: String
+        if model.duration >= 3600 {
+            probe = "1:00:00.000"
+        } else if model.duration >= 600 {
+            probe = "10:00.000"
+        } else {
+            probe = "0:00.000"
+        }
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+        let width = (probe as NSString).size(withAttributes: [.font: font]).width
+        return ceil(width) + 2
+    }
+
     private var transportBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 10) {
             HStack(spacing: 8) {
                 Button {
                     model.togglePlay()
@@ -244,12 +264,22 @@ struct ContentView: View {
 
             Divider().frame(height: 22)
 
-            Text(TimeFormat.timestamp(model.playhead))
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
-                .frame(width: 96, alignment: .leading)
-            Text("/ \(TimeFormat.timestamp(model.duration))")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.secondary)
+            // Playhead and total in one group, so the `/` sits just after the
+            // time rather than 30 pt away. The readout keeps a fixed width (no
+            // jitter as digits change) but sized to the widest timestamp this
+            // file can show, which is what stops the transport bar wrapping to
+            // two lines at the minimum window width.
+            HStack(spacing: 4) {
+                Text(TimeFormat.timestamp(model.playhead))
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .lineLimit(1)
+                    .frame(width: playheadReadoutWidth, alignment: .leading)
+                Text("/ \(TimeFormat.timestamp(model.duration))")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
 
             Divider().frame(height: 22)
 
@@ -304,6 +334,8 @@ struct ContentView: View {
                 .font(.system(size: 8.5, weight: .bold))
                 .foregroundStyle(.secondary)
                 .tracking(0.6)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             HStack(alignment: .firstTextBaseline, spacing: 2) {
                 TextField("", value: value, format: .number.precision(.fractionLength(0...1)))
                     .textFieldStyle(.plain)
@@ -314,7 +346,9 @@ struct ContentView: View {
                 Text("ms")
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
+            .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -328,9 +362,16 @@ struct ContentView: View {
                 .font(.system(size: 8.5, weight: .bold))
                 .foregroundStyle(.secondary)
                 .tracking(0.6)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             Text(value)
                 .font(.system(size: 11.5, weight: .medium, design: .monospaced))
                 .foregroundStyle(tint)
+                .lineLimit(1)
+                // Keep the value at its natural width so a squeezed bar wraps
+                // nothing: the readouts stay on one line instead of collapsing
+                // to "0:01" / ".000" at the minimum window width.
+                .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)

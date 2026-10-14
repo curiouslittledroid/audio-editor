@@ -94,7 +94,11 @@ final class SnapshotController {
         aeLog("SnapshotController.attach file=\(options.filePath ?? "nil") check=\(options.runUICheck)")
         self.model = model
 
-        if let window = NSApp.windows.first {
+        // Size the snapshot window. `NSApp.windows.first` is not reliable here —
+        // SwiftUI may have more than one window alive, and sizing the wrong one
+        // silently left every capture at the minimum size. The window we actually
+        // render is chosen in `captureAndExit`, so the size is applied there too.
+        for window in NSApp.windows {
             window.setContentSize(options.size)
             window.center()
         }
@@ -152,6 +156,11 @@ final class SnapshotController {
         // the snapshot unrepresentative of what the user actually sees.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
+        // Apply the requested size to the window we are about to render. Doing it
+        // here rather than at attach time means it lands on the real window even
+        // when SwiftUI has extra windows alive.
+        window.setContentSize(options.size)
+        window.center()
         window.makeKeyAndOrderFront(nil)
         window.displayIfNeeded()
         view.layoutSubtreeIfNeeded()

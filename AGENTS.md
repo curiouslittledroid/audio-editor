@@ -9,7 +9,7 @@ if you do not know it**.
 ```bash
 ./build.sh                 # required before anything else — see trap 1
 ./tools/selftest.sh        # 123 checks: audio pipeline
-./tools/uitest.sh          # 75 checks: pixel assertions on the rendered window
+./tools/uitest.sh          # 102 checks: pixel assertions on the rendered window
 ./tools/checkspecs.sh      # change specs still cite guarantees that exist
 ```
 
@@ -47,6 +47,11 @@ Configuration therefore goes through the environment, mapped by `capture.sh`:
 | `AUDIOEDIT_LOUD` / `_QUIET` | `a-b,c-d` time ranges expected loud/silent |
 | `AUDIOEDIT_SETTLE` | seconds to wait before capturing (default 1.0) |
 | `AUDIOEDIT_SIZE`, `_BANNER`, `_LOOP` | window size, banner text, looping |
+
+`AUDIOEDIT_SIZE` only works because `captureAndExit` applies it to the window it
+actually renders. Sizing `NSApp.windows.first` in `attach` looked plausible but did
+nothing — SwiftUI keeps several windows alive and the captured one was not that one,
+so every snapshot silently came out at the minimum size.
 | `AUDIOEDIT_SELFTEST` | `:`-separated fixture paths |
 
 Use `./tools/capture.sh <out.png> [--file ... --trim ... --playhead ... --uicheck]`
@@ -209,6 +214,14 @@ Invariants worth preserving:
 - Export opens its own `AVAudioFile` and never shares the playback handle. Preview
   buffers are read before any `scheduleSegment` call, which also mutates the file
   pointer — read the head/tail first, or the middle can play the wrong audio.
+- **Transport readouts are sized to their text, not to a guess.** The playhead
+  readout measures the widest timestamp the file can show (`TimeFormat.timestamp`
+  at 13 pt mono) instead of a flat width, and every readout value is
+  `.fixedSize(horizontal: true, vertical: false)` so it cannot wrap when the bar is
+  squeezed. Both matter: a value wraps the moment its `Text` is allowed to be
+  compressed, and the resulting `0:01` / `.000` split is invisible in a log and
+  easy to reintroduce. `uitest.sh` asserts the amber `In`/`Out` values occupy one
+  line each at the 920 pt minimum.
 
 ## Releasing
 

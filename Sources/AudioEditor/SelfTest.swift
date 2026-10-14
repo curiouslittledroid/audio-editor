@@ -605,23 +605,104 @@ enum SelfTest {
         check("a fully faded pass still covers the selection exactly",
               greedyCovered == Int(frameCount), "\(greedyCovered) vs \(frameCount)")
 
+        // --- a pass that resumes part-way through the selection -------------
+        // This is what a looping resume or a mid-loop fade edit builds. It must
+        // cover exactly the remainder, with the segment starting where the
+        // previous item ended, and the envelope computed against the *whole*
+        // selection rather than the remainder.
+        func contiguous(_ items: [AudioEngineController.PlaybackItem],
+                        from expectedStart: AVAudioFramePosition) -> Bool {
+            var position = expectedStart
+            for item in items {
+                switch item {
+                case .segment(let segmentStart, let count):
+                    if segmentStart != position { return false }
+                    position += AVAudioFramePosition(count)
+                case .buffer(let buffer):
+                    position += AVAudioFramePosition(buffer.frameLength)
+                }
+            }
+            return position == range.start + frameCount
+        }
+
+        let middleOffset = AVAudioFramePosition(frameCount / 2) - counts.fadeIn
+        let middleItems = AudioEngineController.playbackItems(file: file,
+                                                              selectionStart: range.start,
+                                                              selectionFrames: frameCount,
+                                                              beginOffset: middleOffset,
+                                                              fade: spec)
+        check("a mid-selection pass covers exactly the remainder",
+              contiguous(middleItems, from: range.start + middleOffset),
+              "\(middleItems.count) items")
+        // Starting past the fade-in, so the first item is the untouched middle
+        // and the only buffer is the fade-out tail (no fade-in buffer is emitted).
+        var middleBufferCount = 0
+        for item in middleItems { if case .buffer = item { middleBufferCount += 1 } }
+        var startsWithSegment = false
+        if let firstItem = middleItems.first, case .segment = firstItem {
+            startsWithSegment = true
+        }
+        check("a pass resumed past the fade-in emits no fade-in buffer",
+              startsWithSegment && middleBufferCount == 1,
+              "\(middleItems.count) items, \(middleBufferCount) buffers, first is segment: \(startsWithSegment)")
+
+        // Resume inside the fade-out: the first item is a shortened tail whose
+        // envelope continues from the right offset, not one that restarts at 1.
+        let tailOffset = AVAudioFramePosition(frameCount) - counts.fadeOut / 2
+        let tailItems = AudioEngineController.playbackItems(file: file,
+                                                            selectionStart: range.start,
+                                                            selectionFrames: frameCount,
+                                                            beginOffset: tailOffset,
+                                                            fade: spec)
+        check("a pass resumed inside the fade-out is a single tail remainder",
+              tailItems.count == 1, "\(tailItems.count) items")
+        if tailItems.count == 1, case .buffer(let remainder) = tailItems[0] {
+            check("the tail remainder is the part still ahead",
+                  Int(remainder.frameLength) == Int(frameCount - tailOffset),
+                  "\(remainder.frameLength) vs \(frameCount - tailOffset)")
+            let expectedGain = gain(Int(tailOffset))
+            let expectedSample = original[Int(tailOffset)] * expectedGain
+            if let samples = remainder.floatChannelData?[0], abs(expectedSample) > 0.01 {
+                check("the resumed tail continues the envelope rather than restarting it",
+                      abs(samples[0] - expectedSample) < 6.2e-5,
+                      "\(samples[0]) vs \(expectedSample) (gain \(expectedGain))")
+            } else {
+                check("resumed tail has signal to check the envelope", false,
+                      "source \(original[Int(tailOffset)])")
+            }
+        }
+
         // --- the composite pass is schedulable against a real engine ---------
         // Composing the items correctly means nothing if the player rejects the
         // mixed buffer/segment schedule, so drive the real scheduling path once.
         let controller = AudioEngineController()
+        let selectionStartSeconds = Double(range.start) / rate
+        let selectionEndSeconds = Double(range.end) / rate
         do {
             try controller.load(url: source)
-            controller.play(from: Double(range.start) / rate,
-                            to: Double(range.end) / rate,
+            controller.play(from: selectionStartSeconds, to: selectionEndSeconds,
                             looping: false, fade: spec)
             check("a faded pass starts playing", controller.isPlaying)
+            check("a non-looping pass reports no loop range", controller.loopRangeFrames == nil)
             controller.stop()
             check("stopping ends a faded pass", !controller.isPlaying)
 
-            controller.play(from: Double(range.start) / rate,
-                            to: Double(range.end) / rate,
+            controller.play(from: selectionStartSeconds, to: selectionEndSeconds,
                             looping: true, fade: spec)
             check("a looping faded pass starts playing", controller.isPlaying)
+            check("a loop begun at the selection start spans the selection",
+                  controller.loopRangeFrames == range.start...range.end,
+                  "\(String(describing: controller.loopRangeFrames)) vs \(range.start)...\(range.end)")
+            controller.stop()
+
+            // G17: resuming part-way through a loop must not shrink the loop.
+            let resumeSeconds = selectionStartSeconds
+                + (selectionEndSeconds - selectionStartSeconds) * 0.6
+            controller.play(from: resumeSeconds, to: selectionEndSeconds,
+                            looping: true, loopStart: selectionStartSeconds, fade: spec)
+            check("a looping resume keeps the full loop range (G17)",
+                  controller.loopRangeFrames == range.start...range.end,
+                  "\(String(describing: controller.loopRangeFrames)) vs \(range.start)...\(range.end)")
             controller.stop()
         } catch {
             check("faded preview is schedulable", false, "\(error)")

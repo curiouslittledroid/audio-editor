@@ -176,7 +176,7 @@ exact silence at both endpoints, samples left untouched outside the fade regions
 clamping, and the model-side state that keeps the field from overstating what will
 be applied. Preview checks verify the exact pass playback schedules — the faded head
 and tail carry the analytic envelope, and the whole pass covers the selection with no
-gap or overlap. 115 checks.
+gap or overlap. 123 checks.
 
 ### Visual regression — `./tools/uitest.sh`
 

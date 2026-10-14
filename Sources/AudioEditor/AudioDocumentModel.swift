@@ -302,9 +302,18 @@ final class AudioDocumentModel: ObservableObject {
         if playhead < trimStart || playhead >= trimEnd - 0.001 {
             playhead = trimStart
         }
-        engine.play(from: playhead, to: trimEnd, looping: isLooping, fade: fadeSpec)
-        isPlaying = true
+        schedulePlayback(from: playhead)
         startPlayheadTimer()
+    }
+
+    /// Every (re)schedule goes through here so a looping resume always keeps the
+    /// loop anchored to the selection. Passing the playhead as the loop start
+    /// would shrink the loop on every resume — the bug where adjusting a fade
+    /// mid-loop left the loop cycling over just the fade-out window.
+    private func schedulePlayback(from time: Double) {
+        engine.play(from: time, to: trimEnd, looping: isLooping,
+                    loopStart: isLooping ? trimStart : nil, fade: fadeSpec)
+        isPlaying = true
     }
 
     func pause() {
@@ -336,16 +345,13 @@ final class AudioDocumentModel: ObservableObject {
         if playhead >= trimEnd - 0.001 {
             playhead = trimStart
         }
-        engine.play(from: playhead, to: trimEnd, looping: isLooping, fade: fadeSpec)
-        isPlaying = true
+        schedulePlayback(from: playhead)
     }
 
     func setLooping(_ looping: Bool) {
         isLooping = looping
         guard isPlaying else { return }
-        let resume = clampToTrim(playhead)
-        engine.play(from: resume, to: trimEnd, looping: isLooping, fade: fadeSpec)
-        isPlaying = true
+        schedulePlayback(from: clampToTrim(playhead))
     }
 
     private func handleReachedEnd() {
@@ -390,8 +396,7 @@ final class AudioDocumentModel: ObservableObject {
         if playhead < trimStart || playhead >= trimEnd - 0.001 {
             playhead = trimStart
         }
-        engine.play(from: playhead, to: trimEnd, looping: isLooping, fade: fadeSpec)
-        isPlaying = true
+        schedulePlayback(from: playhead)
     }
 
     func setTrimStartToPlayhead() {
@@ -443,9 +448,7 @@ final class AudioDocumentModel: ObservableObject {
     /// rather than on the next loop.
     private func rescheduleForFadeChange() {
         guard isPlaying else { return }
-        let resume = clampToTrim(playhead)
-        engine.play(from: resume, to: trimEnd, looping: isLooping, fade: fadeSpec)
-        isPlaying = true
+        schedulePlayback(from: clampToTrim(playhead))
     }
 
     /// Re-clamps the stored durations after the selection shrinks. The stored

@@ -8,7 +8,7 @@ if you do not know it**.
 
 ```bash
 ./build.sh                 # required before anything else — see trap 1
-./tools/selftest.sh        # 115 checks: audio pipeline
+./tools/selftest.sh        # 123 checks: audio pipeline
 ./tools/uitest.sh          # 75 checks: pixel assertions on the rendered window
 ./tools/checkspecs.sh      # change specs still cite guarantees that exist
 ```
@@ -182,6 +182,13 @@ Invariants worth preserving:
   `[faded head][middle segment][faded tail]` when one is. Two passes are kept in
   flight; the last item of each completed pass tops the queue back up. Do not drop
   to one pass: a heavily faded pass is short and the loop will gap.
+- **A loop's start is not the pass's start.** `play(from:to:looping:loopStart:fade:)`
+  keeps them separate: the first pass may begin at the playhead (a resume), but later
+  passes always cover `[loopStart, end]`. Conflating them means every resume shrinks
+  the loop to `[playhead, trimEnd]` — that was the bug where editing a fade mid-loop
+  left it cycling over just the fade-out window. The model routes every reschedule
+  through `schedulePlayback(from:)`, which is the one place `loopStart: trimStart` is
+  set. `loopRangeFrames` exposes the confirmed range for the self test.
 - **A failed open must not modify state.** `AudioEngineController.load` prepares the
   replacement into locals and commits at the end; `AudioDocumentModel.load` does not
   clear anything until the engine has accepted the file. Reordering this back to

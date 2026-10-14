@@ -137,7 +137,7 @@ Which guarantees an automated check actually enforces today.
 
 | Suite | Guarantees covered |
 | --- | --- |
-| `tools/selftest.sh` (115 checks) | G1–G5 (open/refuse semantics, incl. atomic adoption), G33–G36, G39, G41–G43, G45–G47 |
+| `tools/selftest.sh` (123 checks) | G1–G5 (open/refuse semantics, incl. atomic adoption), G17 (loop range survives a mid-selection resume), G33–G36, G39, G41–G43, G45–G47 |
 | `tools/uitest.sh` (75 checks) | G10, G12 (waveform drawn and positioned in time), G24, G26, G28, G30 (handle positions), G15, G18 (playhead position), G41, G44 (fade envelope present, positioned, and linear) |
 
 ### Not enforced by any check — regressions can slip through here
@@ -145,7 +145,6 @@ Which guarantees an automated check actually enforces today.
 | | Guarantee | Why it matters |
 | --- | --- | --- |
 | G13, G14, G16, G19 | selection-only playback, restart behaviour | Core promise of a trimmer; currently only manual. |
-| G17 | gapless looping | Audible artefact, easy to break when touching scheduling. |
 | G21, G22 | behaviour while playing | Interaction bugs that are awkward to test, but users hit them. |
 | G25, G27 | clamping, playhead coupling | Off-by-one at the boundaries is silent. |
 | G29 | drag stickiness | Only reproducible with real pointer movement. |
